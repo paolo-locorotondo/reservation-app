@@ -1,0 +1,95 @@
+// Prisma schema — reservation-app
+// See plan: ../../../C:/Users/PAOLOLOCOROTONDO/.claude/plans/twinkling-humming-whisper.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum SpotType {
+  PARKING
+  DESK
+}
+
+enum ReservationStatus {
+  ACTIVE
+  CANCELLED
+}
+
+model User {
+  id           String        @id @default(cuid())
+  entraOid     String        @unique
+  email        String        @unique
+  displayName  String
+  role         Role          @default(USER)
+  reservations Reservation[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Site {
+  id     String  @id @default(cuid())
+  code   String  @unique
+  name   String
+  floors Floor[]
+}
+
+model Floor {
+  id     String @id @default(cuid())
+  siteId String
+  name   String
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  zones  Zone[]
+  spots  Spot[]
+
+  @@unique([siteId, name])
+}
+
+model Zone {
+  id      String @id @default(cuid())
+  floorId String
+  name    String
+  floor   Floor  @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  spots   Spot[]
+
+  @@unique([floorId, name])
+}
+
+model Spot {
+  id           String        @id @default(cuid())
+  code         String
+  type         SpotType
+  floorId      String
+  zoneId       String?
+  active       Boolean       @default(true)
+  floor        Floor         @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  zone         Zone?         @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  reservations Reservation[]
+
+  @@unique([floorId, code])
+  @@index([type, active])
+}
+
+model Reservation {
+  id        String            @id @default(cuid())
+  userId    String
+  spotId    String
+  date      DateTime          @db.Date
+  status    ReservationStatus @default(ACTIVE)
+  createdAt DateTime          @default(now())
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  spot      Spot              @relation(fields: [spotId], references: [id], onDelete: Cascade)
+
+  @@unique([spotId, date, status])
+  @@index([userId, date])
+  @@index([date, status])
+}

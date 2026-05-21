@@ -1,0 +1,21 @@
+@use "@carbon/react/scss/reset";
+@use "@carbon/react/scss/themes";
+@use "@carbon/react/scss/theme" with (
+  $theme: themes.$white
+);
+@use "@carbon/react";
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background-color: theme.$background;
+  color: theme.$text-primary;
+  font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+}
+
+main {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
