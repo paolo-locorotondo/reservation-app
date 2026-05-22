@@ -5,6 +5,8 @@
   "description": "NestJS backend API",
   "scripts": {
     "build": "nest build",
+    "prebuild": "pnpm --filter @reservation/shared build",
+    "predev": "pnpm --filter @reservation/shared build",
     "dev": "dotenv -e ../../.env -- nest start --watch",
     "start": "dotenv -e ../../.env -- node dist/main",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
