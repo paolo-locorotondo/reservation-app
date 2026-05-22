@@ -104,7 +104,11 @@ model Reservation {
   user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   spot      Spot              @relation(fields: [spotId], references: [id], onDelete: Cascade)
 
-  @@unique([spotId, date, status])
+  // Unicità "una sola ACTIVE per spot+giorno" è gestita da un partial unique
+  // index in SQL (vedi migration `reservation_active_partial_unique`):
+  // CREATE UNIQUE INDEX ... ON "Reservation"("spotId","date") WHERE status='ACTIVE'
+  // Un @@unique pieno su (spotId,date,status) impedirebbe il secondo cancel
+  // dello stesso spot/giorno (collisione su CANCELLED già storica).
   @@index([userId, date])
   @@index([date, status])
 }

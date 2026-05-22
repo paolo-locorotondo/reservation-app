@@ -19,8 +19,11 @@ import {
   InlineNotification,
   Button,
 } from "@carbon/react";
+import { Italian } from "flatpickr/dist/l10n/it.js";
+import type { CustomLocale } from "flatpickr/dist/types/locale";
 import type { Site, Floor, SpotType, SpotWithAvailability } from "@reservation/shared";
 import { api, ApiError } from "@/lib/api";
+import { BookingDialog, type BookingTarget } from "./BookingDialog";
 
 interface Props {
   type: SpotType;
@@ -58,6 +61,17 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
   const [spots, setSpots] = useState<SpotWithAvailability[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bookingTarget, setBookingTarget] = useState<BookingTarget | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+  // Locale Flatpickr derivato dal browser. Lo settiamo dopo il mount per evitare
+  // mismatch SSR (`navigator` non esiste lato server).
+  const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(undefined);
+
+  useEffect(() => {
+    const lang = navigator.language?.toLowerCase() ?? "";
+    if (lang.startsWith("it")) setDatePickerLocale(Italian);
+  }, []);
 
   // sites: una sola volta
   useEffect(() => {
@@ -91,7 +105,7 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
       .then(setSpots)
       .catch((e: ApiError) => setError(`Caricamento posti: ${e.message}`))
       .finally(() => setLoading(false));
-  }, [type, date, siteId, floorId]);
+  }, [type, date, siteId, floorId, reloadTick]);
 
   const floorById = useMemo(
     () => Object.fromEntries(floors.map((f) => [f.id, f.name])),
@@ -144,6 +158,7 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
         <DatePicker
           datePickerType="single"
           dateFormat="Y-m-d"
+          locale={datePickerLocale}
           value={date}
           minDate={todayIso()}
           onChange={(dates: Date[]) => {
@@ -164,6 +179,16 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
           title="Errore"
           subtitle={error}
           onCloseButtonClick={() => setError(null)}
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      {successMsg && (
+        <InlineNotification
+          kind="success"
+          title="Prenotazione confermata"
+          subtitle={successMsg}
+          onCloseButtonClick={() => setSuccessMsg(null)}
           style={{ marginBottom: "1rem" }}
         />
       )}
@@ -214,8 +239,14 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
                                   kind="primary"
                                   disabled={!available}
                                   onClick={() => {
-                                    // Sprint 3: aprirà il dialog di conferma prenotazione.
-                                    alert(`Prenotazione di ${row.id} su ${date} — Sprint 3`);
+                                    const code = row.cells.find((c) => c.info.header === "code")
+                                      ?.value as string;
+                                    setBookingTarget({
+                                      spotId: row.id,
+                                      spotCode: code,
+                                      date,
+                                      type,
+                                    });
                                   }}
                                 >
                                   Prenota
@@ -234,6 +265,19 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
           )}
         </DataTable>
       )}
+
+      <BookingDialog
+        target={bookingTarget}
+        onClose={() => setBookingTarget(null)}
+        onSuccess={() => {
+          if (bookingTarget) {
+            setSuccessMsg(
+              `${bookingTarget.spotCode} prenotato per il ${bookingTarget.date}.`,
+            );
+          }
+          setReloadTick((t) => t + 1);
+        }}
+      />
     </main>
   );
 }

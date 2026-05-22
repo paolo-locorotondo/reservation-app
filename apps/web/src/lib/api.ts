@@ -1,4 +1,23 @@
-import type { Site, Floor, SpotType, SpotWithAvailability } from "@reservation/shared";
+import type {
+  Site,
+  Floor,
+  SpotType,
+  SpotWithAvailability,
+  CreateReservationDto,
+  Reservation,
+} from "@reservation/shared";
+
+// Mia prenotazione, come restituita da GET /reservations/me — include lo spot
+// con floor+site+zone per visualizzazione.
+export interface MyReservation extends Reservation {
+  spot: {
+    id: string;
+    code: string;
+    type: SpotType;
+    floor: { id: string; name: string; site: { id: string; name: string; code: string } };
+    zone: { id: string; name: string } | null;
+  };
+}
 
 // Helper per chiamate al BFF (`/api/proxy/...`).
 // Tutte le route del backend sono dietro il proxy: il browser non parla mai
@@ -33,5 +52,21 @@ export const api = {
     if (params.siteId) qs.set("siteId", params.siteId);
     if (params.floorId) qs.set("floorId", params.floorId);
     return call<SpotWithAvailability[]>(`/spots?${qs.toString()}`);
+  },
+  createReservation: (dto: CreateReservationDto) =>
+    call<Reservation>("/reservations", {
+      method: "POST",
+      body: JSON.stringify(dto),
+    }),
+  cancelReservation: (id: string) =>
+    call<{ id: string; status: "ACTIVE" | "CANCELLED" }>(`/reservations/${id}`, {
+      method: "DELETE",
+    }),
+  listMyReservations: (params?: { from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.from) qs.set("from", params.from);
+    if (params?.to) qs.set("to", params.to);
+    const q = qs.toString();
+    return call<MyReservation[]>(`/reservations/me${q ? `?${q}` : ""}`);
   },
 };

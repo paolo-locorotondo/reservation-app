@@ -126,6 +126,9 @@ importers:
       '@reservation/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      flatpickr:
+        specifier: 4.6.13
+        version: 4.6.13
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3

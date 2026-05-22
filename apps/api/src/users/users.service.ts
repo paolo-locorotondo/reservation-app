@@ -50,4 +50,18 @@ export class UsersService {
       },
     });
   }
+
+  /**
+   * Risolve l'utente dal token JWT senza fare scritture, hot-path delle API.
+   * Se l'account non esiste ancora (utente non è mai passato da `/me`), fa fallback
+   * al provisioning completo per non rompere il flusso.
+   */
+  async getByToken(payload: JwtPayload): Promise<User> {
+    const account = await this.prisma.account.findUnique({
+      where: { provider_providerSub: { provider: payload.provider, providerSub: payload.sub } },
+      include: { user: true },
+    });
+    if (account) return account.user;
+    return this.provisionFromToken(payload);
+  }
 }

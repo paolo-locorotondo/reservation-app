@@ -6,6 +6,7 @@ import { AuthModule } from "./auth/auth.module";
 import { UsersModule } from "./users/users.module";
 import { SitesModule } from "./sites/sites.module";
 import { SpotsModule } from "./spots/spots.module";
+import { ReservationsModule } from "./reservations/reservations.module";
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { SpotsModule } from "./spots/spots.module";
     UsersModule,
     SitesModule,
     SpotsModule,
+    ReservationsModule,
   ],
   controllers: [HealthController],
 })
