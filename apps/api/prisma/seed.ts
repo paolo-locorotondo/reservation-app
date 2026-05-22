@@ -113,16 +113,16 @@ async function main() {
   });
 
   console.log("[seed] creating test users...");
+  // Utenti di seed senza identificatori IdP: servono solo come dati di test per le prenotazioni.
+  // Gli utenti reali vengono provisionati al primo login (Google/Entra).
   await prisma.user.createMany({
     data: [
       {
-        entraOid: "dev-admin-oid",
         email: "admin@test.local",
         displayName: "Admin Test",
         role: Role.ADMIN,
       },
       {
-        entraOid: "dev-user-oid",
         email: "user@test.local",
         displayName: "Mario Rossi",
         role: Role.USER,

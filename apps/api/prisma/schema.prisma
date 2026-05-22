@@ -27,13 +27,28 @@ enum ReservationStatus {
 
 model User {
   id           String        @id @default(cuid())
-  entraOid     String        @unique
   email        String        @unique
   displayName  String
   role         Role          @default(USER)
+  accounts     Account[]
   reservations Reservation[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+}
+
+// Identità federata: collega un utente a uno o più provider IdP (Google, Entra, …).
+// Lookup al login: findUnique per (provider, providerSub); se assente, fallback per email
+// e link del nuovo Account allo User esistente.
+model Account {
+  id          String   @id @default(cuid())
+  userId      String
+  provider    String   // es. "google" | "entra"
+  providerSub String   // identificatore stabile del provider (sub/oid)
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSub])
+  @@index([userId])
 }
 
 model Site {

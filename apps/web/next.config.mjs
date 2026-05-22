@@ -5,14 +5,6 @@ const nextConfig = {
   sassOptions: {
     includePaths: ["./src/styles"],
   },
-  async rewrites() {
-    return [
-      {
-        source: "/api/proxy/:path*",
-        destination: `${process.env.API_INTERNAL_URL ?? "http://localhost:3001"}/api/:path*`,
-      },
-    ];
-  },
 };
 
 export default nextConfig;
