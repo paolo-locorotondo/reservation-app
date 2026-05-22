@@ -13,6 +13,7 @@ export type Spot = z.infer<typeof SpotSchema>;
 
 export const SpotWithAvailabilitySchema = SpotSchema.extend({
   available: z.boolean(),
+  zoneName: z.string().nullable(),
 });
 export type SpotWithAvailability = z.infer<typeof SpotWithAvailabilitySchema>;
 

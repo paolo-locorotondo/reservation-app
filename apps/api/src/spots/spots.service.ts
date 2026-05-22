@@ -34,6 +34,7 @@ export class SpotsService {
         floorId: true,
         zoneId: true,
         active: true,
+        zone: { select: { name: true } },
       },
     });
     if (spots.length === 0) return [];
@@ -48,7 +49,11 @@ export class SpotsService {
     });
     const taken = new Set(reservations.map((r) => r.spotId));
 
-    return spots.map((s) => ({ ...s, available: !taken.has(s.id) }));
+    return spots.map(({ zone, ...s }) => ({
+      ...s,
+      zoneName: zone?.name ?? null,
+      available: !taken.has(s.id),
+    }));
   }
 }
 

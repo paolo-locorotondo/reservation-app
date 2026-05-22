@@ -18,7 +18,10 @@ import {
   InlineLoading,
   InlineNotification,
   Button,
+  IconButton,
+  Search,
 } from "@carbon/react";
+import { Filter, FilterEdit } from "@carbon/icons-react";
 import { Italian } from "flatpickr/dist/l10n/it.js";
 import type { CustomLocale } from "flatpickr/dist/types/locale";
 import type { Site, Floor, SpotType, SpotWithAvailability } from "@reservation/shared";
@@ -38,6 +41,9 @@ const HEADERS = [
   { key: "available", header: "Disponibilità" },
   { key: "actions", header: "" },
 ];
+
+// Colonne su cui mostriamo l'icona di filtro per testo. "actions" è esclusa.
+const FILTERABLE_KEYS = new Set(["code", "floor", "zone", "available"]);
 
 function todayIso(): string {
   const d = new Date();
@@ -64,6 +70,10 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
   const [bookingTarget, setBookingTarget] = useState<BookingTarget | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
+  // Filtri per-colonna: chiave colonna → testo digitato. `openFilter` è la
+  // colonna con l'input attualmente aperto (al massimo uno per volta).
+  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+  const [openFilter, setOpenFilter] = useState<string | null>(null);
   // Locale Flatpickr derivato dal browser. Lo settiamo dopo il mount per evitare
   // mismatch SSR (`navigator` non esiste lato server).
   const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(undefined);
@@ -116,9 +126,25 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
     id: s.id,
     code: s.code,
     floor: floorById[s.floorId] ?? "—",
-    zone: s.zoneId ?? "—",
+    zone: s.zoneName ?? "—",
     available: s.available,
   }));
+
+  // Applica i filtri per-colonna (case-insensitive, substring). Per la colonna
+  // "available" il valore booleano è normalizzato in "disponibile"/"occupato"
+  // così l'utente può filtrare digitando ad es. "occ" o "disp".
+  const filteredRows = rows.filter((r) =>
+    Object.entries(colFilters).every(([key, q]) => {
+      if (!q) return true;
+      const cell =
+        key === "available"
+          ? r.available
+            ? "disponibile"
+            : "occupato"
+          : String(r[key as keyof typeof r] ?? "");
+      return cell.toLowerCase().includes(q.toLowerCase());
+    }),
+  );
 
   return (
     <main>
@@ -193,12 +219,23 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
         />
       )}
 
+      {!loading && rows.length > 0 && filteredRows.length === 0 && (
+        <InlineNotification
+          kind="warning"
+          title="Nessun risultato"
+          subtitle="Nessun posto corrisponde ai filtri di colonna applicati."
+          hideCloseButton
+          lowContrast
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
       {loading ? (
         <InlineLoading description="Carico i posti…" />
       ) : rows.length === 0 ? (
         <p style={{ color: "#525252" }}>Nessun posto trovato per i filtri selezionati.</p>
       ) : (
-        <DataTable rows={rows} headers={HEADERS}>
+        <DataTable rows={filteredRows} headers={HEADERS}>
           {({ rows: rs, headers, getHeaderProps, getRowProps, getTableProps }) => (
             <TableContainer>
               <Table {...getTableProps()}>
@@ -206,9 +243,65 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
                   <TableRow>
                     {headers.map((h) => {
                       const { key, ...headerProps } = getHeaderProps({ header: h });
+                      const filterable = FILTERABLE_KEYS.has(h.key);
+                      const value = colFilters[h.key] ?? "";
+                      const isOpen = openFilter === h.key;
                       return (
                         <TableHeader key={key} {...headerProps}>
-                          {h.header}
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "0.25rem",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "0.25rem",
+                              }}
+                            >
+                              <span>{h.header}</span>
+                              {filterable && (
+                                <IconButton
+                                  kind="ghost"
+                                  size="sm"
+                                  label={value ? `Filtro attivo: "${value}"` : `Filtra ${h.header}`}
+                                  align="bottom"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenFilter(isOpen ? null : h.key);
+                                  }}
+                                >
+                                  {value ? <FilterEdit /> : <Filter />}
+                                </IconButton>
+                              )}
+                            </div>
+                            {filterable && isOpen && (
+                              <Search
+                                id={`col-filter-${h.key}`}
+                                labelText={`Filtra ${h.header}`}
+                                placeholder="Filtra…"
+                                size="sm"
+                                value={value}
+                                autoFocus
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) =>
+                                  setColFilters((prev) => ({
+                                    ...prev,
+                                    [h.key]: e.target.value,
+                                  }))
+                                }
+                                onClear={() =>
+                                  setColFilters((prev) => {
+                                    const { [h.key]: _, ...rest } = prev;
+                                    return rest;
+                                  })
+                                }
+                              />
+                            )}
+                          </div>
                         </TableHeader>
                       );
                     })}

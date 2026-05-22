@@ -63,6 +63,39 @@ async function main() {
     include: { floors: { include: { zones: true } } },
   });
 
+  const bari = await prisma.site.create({
+    data: {
+      code: "BA-01",
+      name: "Bari",
+      floors: {
+        create: [
+          {
+            name: "Piano -3 (Parcheggio)",
+            zones: { create: [{ name: "Zona Unica" }] }, // 14 posti
+          },
+          {
+            name: "Piano 3 (Uffici)",
+            zones: { create: [
+              { name: "Stanza 314 (Open Space sala piccola)" }, // 8 posti
+              { name: "Stanza 315" }, // 5 posti
+              { name: "Stanza 316 (Open Space sala grande)" }, // 12 posti
+              { name: "Stanza 316bis" }, // 5 posti
+              { name: "Stanza 317" }, // 5 posti
+              { name: "Stanza 318" }, // 5 posti
+              { name: "Stanza 319" }, // 5 posti
+              { name: "Stanza 320" }, // 5 posti
+              { name: "Stanza 321" }, // 1 posto
+              { name: "Stanza 325" }, // 3 posti
+              { name: "Stanza 326" }, // 4 posti
+              { name: "Stanza 327" }, // 4 posti
+            ] },
+          },
+        ],
+      },
+    },
+    include: { floors: { include: { zones: true } } },
+  });
+
   // Milano: parcheggio (Piano Terra) — 15 posti distribuiti su Zona A/B
   const miPark = milano.floors.find((f) => f.name.includes("Parcheggio"))!;
   const miParkSpots = Array.from({ length: 15 }, (_, i) => ({
@@ -108,8 +141,44 @@ async function main() {
     })),
   ];
 
+  // Bari: 14 posti auto al piano -3 + 62 scrivanie al piano 3 (12 stanze)
+  const baPark = bari.floors.find((f) => f.name.includes("Parcheggio"))!;
+  const baParkSpots = Array.from({ length: 14 }, (_, i) => ({
+    code: `P-${String(i + 1).padStart(2, "0")}`,
+    type: SpotType.PARKING,
+    floorId: baPark.id,
+    zoneId: baPark.zones[0].id,
+  }));
+
+  const baFloor3 = bari.floors.find((f) => f.name.startsWith("Piano 3"))!;
+  // Mappa stanza → numero posti (totale 62). Il `codePart` è il numero della
+  // stanza usato come parte del codice scrivania (es. S-316b-03 per Stanza 316bis).
+  const baRooms: ReadonlyArray<{ zoneName: string; codePart: string; count: number }> = [
+    { zoneName: "Stanza 314 (Open Space sala piccola)", codePart: "314",  count: 8 },
+    { zoneName: "Stanza 315",                            codePart: "315",  count: 5 },
+    { zoneName: "Stanza 316 (Open Space sala grande)",  codePart: "316",  count: 12 },
+    { zoneName: "Stanza 316bis",                         codePart: "316b", count: 5 },
+    { zoneName: "Stanza 317",                            codePart: "317",  count: 5 },
+    { zoneName: "Stanza 318",                            codePart: "318",  count: 5 },
+    { zoneName: "Stanza 319",                            codePart: "319",  count: 5 },
+    { zoneName: "Stanza 320",                            codePart: "320",  count: 5 },
+    { zoneName: "Stanza 321",                            codePart: "321",  count: 1 },
+    { zoneName: "Stanza 325",                            codePart: "325",  count: 3 },
+    { zoneName: "Stanza 326",                            codePart: "326",  count: 4 },
+    { zoneName: "Stanza 327",                            codePart: "327",  count: 4 },
+  ];
+  const baZoneIdByName = Object.fromEntries(baFloor3.zones.map((z) => [z.name, z.id]));
+  const baDeskSpots = baRooms.flatMap((r) =>
+    Array.from({ length: r.count }, (_, i) => ({
+      code: `S-${r.codePart}-${String(i + 1).padStart(2, "0")}`,
+      type: SpotType.DESK,
+      floorId: baFloor3.id,
+      zoneId: baZoneIdByName[r.zoneName],
+    })),
+  );
+
   await prisma.spot.createMany({
-    data: [...miParkSpots, ...miDeskSpots, ...rmSpots],
+    data: [...miParkSpots, ...miDeskSpots, ...rmSpots, ...baParkSpots, ...baDeskSpots],
   });
 
   console.log("[seed] creating test users...");

@@ -81,8 +81,8 @@ reservation-app/
 ## Roadmap
 
 - [x] Sprint 0 — Bootstrap (monorepo + scaffold + DB + healthcheck)
-- [ ] Sprint 1 — Auth (Entra ID + NextAuth + BFF + RolesGuard)
-- [ ] Sprint 2 — Catalogo posti
-- [ ] Sprint 3 — Prenotazioni (regole + API + UI)
+- [x] Sprint 1 — Auth (Entra ID + NextAuth + BFF + RolesGuard)
+- [x] Sprint 2 — Catalogo posti
+- [x] Sprint 3 — Prenotazioni (regole + API + UI)
 - [ ] Sprint 4 — Rifiniture (responsive, "Le mie prenotazioni", errori)
 - [ ] Sprint 5 — Qualità (test, e2e Playwright, README finale)
