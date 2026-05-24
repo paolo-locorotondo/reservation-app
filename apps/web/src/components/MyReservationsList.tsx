@@ -339,7 +339,9 @@ export function MyReservationsList() {
                               </TableCell>
                             );
                           }
-                          return <TableCell key={cell.id}>{String(cell.value)}</TableCell>;
+                          return (
+                            <TableCell key={cell.id}>{String(cell.value)}</TableCell>
+                          );
                         })}
                       </TableRow>
                     );

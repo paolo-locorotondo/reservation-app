@@ -14,10 +14,8 @@ import {
   SelectItem,
   DatePicker,
   DatePickerInput,
-  Tag,
   InlineLoading,
   InlineNotification,
-  Button,
   IconButton,
   Search,
 } from "@carbon/react";
@@ -38,14 +36,10 @@ const HEADERS = [
   { key: "code", header: "Codice" },
   { key: "floor", header: "Piano" },
   { key: "zone", header: "Zona" },
-  { key: "available", header: "Disponibilità" },
-  { key: "actions", header: "" },
 ];
 
-// Colonne su cui mostriamo l'icona di filtro per testo. "actions" è esclusa.
-const FILTERABLE_KEYS = new Set(["code", "floor", "zone", "available"]);
-// Colonne ordinabili: tutte tranne "actions".
-const SORTABLE_KEYS = new Set(["code", "floor", "zone", "available"]);
+const FILTERABLE_KEYS = new Set(["code", "floor", "zone"]);
+const SORTABLE_KEYS = new Set(["code", "floor", "zone"]);
 
 type SortState = { key: string; dir: "asc" | "desc" } | null;
 function nextSort(prev: SortState, key: string): SortState {
@@ -137,42 +131,23 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
     code: s.code,
     floor: floorById[s.floorId] ?? "—",
     zone: s.zoneName ?? "—",
-    available: s.available,
   }));
 
-  // Applica i filtri per-colonna (case-insensitive, substring). Per la colonna
-  // "available" il valore booleano è normalizzato in "disponibile"/"occupato"
-  // così l'utente può filtrare digitando ad es. "occ" o "disp".
   const filteredRows = rows.filter((r) =>
     Object.entries(colFilters).every(([key, q]) => {
       if (!q) return true;
-      const cell =
-        key === "available"
-          ? r.available
-            ? "disponibile"
-            : "occupato"
-          : String(r[key as keyof typeof r] ?? "");
+      const cell = String(r[key as keyof typeof r] ?? "");
       return cell.toLowerCase().includes(q.toLowerCase());
     }),
   );
 
-  // Ordinamento per la colonna selezionata. Per "available" (booleano) ordiniamo
-  // numericamente: asc = occupati prima, desc = disponibili prima. Per le stringhe
-  // localeCompare con `numeric` per gestire i suffissi numerici dei codici.
   const sortedRows = sort
     ? [...filteredRows].sort((a, b) => {
         const k = sort.key as keyof typeof a;
-        const va = a[k];
-        const vb = b[k];
-        let cmp = 0;
-        if (typeof va === "boolean" && typeof vb === "boolean") {
-          cmp = va === vb ? 0 : va ? 1 : -1;
-        } else {
-          cmp = String(va ?? "").localeCompare(String(vb ?? ""), undefined, {
-            numeric: true,
-            sensitivity: "base",
-          });
-        }
+        const cmp = String(a[k] ?? "").localeCompare(String(b[k] ?? ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
         return sort.dir === "asc" ? cmp : -cmp;
       })
     : filteredRows;
@@ -182,15 +157,7 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
       <h1 style={{ marginBottom: "0.25rem" }}>{title}</h1>
       <p style={{ marginBottom: "2rem", color: "#525252" }}>{subtitle}</p>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
-          gap: "1rem",
-          marginBottom: "2rem",
-          maxWidth: "900px",
-        }}
-      >
+      <div className="rsv-filter-grid">
         <Select
           id="site-select"
           labelText="Sede"
@@ -363,46 +330,30 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
                 </TableHead>
                 <TableBody>
                   {rs.map((row) => {
-                    const available = row.cells.find((c) => c.info.header === "available")
-                      ?.value as boolean;
+                    const spot = spots.find((s) => s.id === row.id);
+                    const available = spot?.available ?? false;
                     const { key: rowKey, ...rowProps } = getRowProps({ row });
+                    const code = row.cells.find((c) => c.info.header === "code")
+                      ?.value as string;
                     return (
-                      <TableRow key={rowKey} {...rowProps}>
-                        {row.cells.map((cell) => {
-                          if (cell.info.header === "available") {
-                            return (
-                              <TableCell key={cell.id}>
-                                <Tag type={available ? "green" : "red"}>
-                                  {available ? "Disponibile" : "Occupato"}
-                                </Tag>
-                              </TableCell>
-                            );
-                          }
-                          if (cell.info.header === "actions") {
-                            return (
-                              <TableCell key={cell.id}>
-                                <Button
-                                  size="sm"
-                                  kind="primary"
-                                  disabled={!available}
-                                  onClick={() => {
-                                    const code = row.cells.find((c) => c.info.header === "code")
-                                      ?.value as string;
-                                    setBookingTarget({
-                                      spotId: row.id,
-                                      spotCode: code,
-                                      date,
-                                      type,
-                                    });
-                                  }}
-                                >
-                                  Prenota
-                                </Button>
-                              </TableCell>
-                            );
-                          }
-                          return <TableCell key={cell.id}>{String(cell.value)}</TableCell>;
-                        })}
+                      <TableRow
+                        key={rowKey}
+                        {...rowProps}
+                        className={available ? "rsv-row-available" : "rsv-row-occupied"}
+                        onClick={() => {
+                          if (!available) return;
+                          setBookingTarget({
+                            spotId: row.id,
+                            spotCode: code,
+                            date,
+                            type,
+                          });
+                        }}
+                        title={available ? "Clicca per prenotare" : "Posto non disponibile"}
+                      >
+                        {row.cells.map((cell) => (
+                          <TableCell key={cell.id}>{String(cell.value)}</TableCell>
+                        ))}
                       </TableRow>
                     );
                   })}

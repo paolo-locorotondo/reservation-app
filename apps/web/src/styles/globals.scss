@@ -19,3 +19,65 @@ main {
   max-width: 1200px;
   margin: 0 auto;
 }
+
+// Carbon $breakpoint-md = 672px. Sotto, riduciamo il padding e collassiamo la
+// griglia dei filtri a singola colonna.
+@media (max-width: 671px) {
+  main {
+    padding: 1rem;
+  }
+}
+
+.rsv-filter-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  max-width: 900px;
+}
+@media (max-width: 671px) {
+  .rsv-filter-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+// Email utente nella global bar: utile su desktop, ma su mobile occupa spazio
+// che serve al titolo + bottone logout.
+.rsv-header-email {
+  font-size: 0.875rem;
+  padding: 0 1rem;
+  align-self: center;
+  color: #ffffff;
+}
+@media (max-width: 671px) {
+  .rsv-header-email {
+    display: none;
+  }
+}
+
+// Stato del posto rappresentato dal colore della riga (al posto di una colonna
+// dedicata). Verde = disponibile e cliccabile; rosso = occupato. Manteniamo
+// `!important` perché Carbon applica background sulle celle al passaggio del
+// mouse e via stripe/zebra: senza forzare, il tint si perderebbe.
+.rsv-row-available,
+.rsv-row-occupied {
+  & > td {
+    transition: background-color 120ms ease;
+  }
+}
+.rsv-row-available {
+  cursor: pointer;
+  & > td {
+    background-color: #defbe6 !important; // Carbon green-10
+  }
+  &:hover > td {
+    background-color: #a7f0ba !important; // Carbon green-20
+  }
+}
+.rsv-row-occupied {
+  cursor: not-allowed;
+  & > td {
+    background-color: #fff1f1 !important; // Carbon red-10
+    color: #525252;
+  }
+}
