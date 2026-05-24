@@ -21,7 +21,7 @@ import {
   IconButton,
   Search,
 } from "@carbon/react";
-import { Filter, FilterEdit } from "@carbon/icons-react";
+import { Filter, FilterEdit, ArrowsVertical, ArrowUp, ArrowDown } from "@carbon/icons-react";
 import { Italian } from "flatpickr/dist/l10n/it.js";
 import type { CustomLocale } from "flatpickr/dist/types/locale";
 import type { Site, Floor, SpotType, SpotWithAvailability } from "@reservation/shared";
@@ -44,6 +44,15 @@ const HEADERS = [
 
 // Colonne su cui mostriamo l'icona di filtro per testo. "actions" è esclusa.
 const FILTERABLE_KEYS = new Set(["code", "floor", "zone", "available"]);
+// Colonne ordinabili: tutte tranne "actions".
+const SORTABLE_KEYS = new Set(["code", "floor", "zone", "available"]);
+
+type SortState = { key: string; dir: "asc" | "desc" } | null;
+function nextSort(prev: SortState, key: string): SortState {
+  if (!prev || prev.key !== key) return { key, dir: "asc" };
+  if (prev.dir === "asc") return { key, dir: "desc" };
+  return null;
+}
 
 function todayIso(): string {
   const d = new Date();
@@ -74,6 +83,7 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
   // colonna con l'input attualmente aperto (al massimo uno per volta).
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
   const [openFilter, setOpenFilter] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortState>(null);
   // Locale Flatpickr derivato dal browser. Lo settiamo dopo il mount per evitare
   // mismatch SSR (`navigator` non esiste lato server).
   const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(undefined);
@@ -145,6 +155,27 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
       return cell.toLowerCase().includes(q.toLowerCase());
     }),
   );
+
+  // Ordinamento per la colonna selezionata. Per "available" (booleano) ordiniamo
+  // numericamente: asc = occupati prima, desc = disponibili prima. Per le stringhe
+  // localeCompare con `numeric` per gestire i suffissi numerici dei codici.
+  const sortedRows = sort
+    ? [...filteredRows].sort((a, b) => {
+        const k = sort.key as keyof typeof a;
+        const va = a[k];
+        const vb = b[k];
+        let cmp = 0;
+        if (typeof va === "boolean" && typeof vb === "boolean") {
+          cmp = va === vb ? 0 : va ? 1 : -1;
+        } else {
+          cmp = String(va ?? "").localeCompare(String(vb ?? ""), undefined, {
+            numeric: true,
+            sensitivity: "base",
+          });
+        }
+        return sort.dir === "asc" ? cmp : -cmp;
+      })
+    : filteredRows;
 
   return (
     <main>
@@ -235,7 +266,7 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
       ) : rows.length === 0 ? (
         <p style={{ color: "#525252" }}>Nessun posto trovato per i filtri selezionati.</p>
       ) : (
-        <DataTable rows={filteredRows} headers={HEADERS}>
+        <DataTable rows={sortedRows} headers={HEADERS}>
           {({ rows: rs, headers, getHeaderProps, getRowProps, getTableProps }) => (
             <TableContainer>
               <Table {...getTableProps()}>
@@ -244,8 +275,17 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
                     {headers.map((h) => {
                       const { key, ...headerProps } = getHeaderProps({ header: h });
                       const filterable = FILTERABLE_KEYS.has(h.key);
+                      const sortable = SORTABLE_KEYS.has(h.key);
                       const value = colFilters[h.key] ?? "";
                       const isOpen = openFilter === h.key;
+                      const sortDir = sort?.key === h.key ? sort.dir : null;
+                      const SortIcon =
+                        sortDir === "asc" ? ArrowUp : sortDir === "desc" ? ArrowDown : ArrowsVertical;
+                      const sortLabel = sortDir
+                        ? `Ordinato ${sortDir === "asc" ? "crescente" : "decrescente"} — clic per ${
+                            sortDir === "asc" ? "decrescente" : "rimuovere"
+                          }`
+                        : `Ordina ${h.header}`;
                       return (
                         <TableHeader key={key} {...headerProps}>
                           <div
@@ -263,6 +303,20 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
                               }}
                             >
                               <span>{h.header}</span>
+                              {sortable && (
+                                <IconButton
+                                  kind="ghost"
+                                  size="sm"
+                                  label={sortLabel}
+                                  align="bottom"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSort((prev) => nextSort(prev, h.key));
+                                  }}
+                                >
+                                  <SortIcon />
+                                </IconButton>
+                              )}
                               {filterable && (
                                 <IconButton
                                   kind="ghost"

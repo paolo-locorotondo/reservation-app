@@ -12,10 +12,23 @@ import {
   TableContainer,
   Tag,
   Button,
+  IconButton,
   InlineLoading,
   InlineNotification,
   Modal,
+  Search,
+  DatePicker,
+  DatePickerInput,
 } from "@carbon/react";
+import {
+  Filter,
+  FilterEdit,
+  ArrowsVertical,
+  ArrowUp,
+  ArrowDown,
+} from "@carbon/icons-react";
+import { Italian } from "flatpickr/dist/l10n/it.js";
+import type { CustomLocale } from "flatpickr/dist/types/locale";
 import { api, ApiError, type MyReservation } from "@/lib/api";
 
 const HEADERS = [
@@ -28,6 +41,22 @@ const HEADERS = [
   { key: "actions", header: "" },
 ];
 
+const FILTERABLE_KEYS = new Set(["date", "type", "code", "site", "floor", "zone"]);
+const SORTABLE_KEYS = new Set(["date", "type", "code", "site", "floor", "zone"]);
+
+type SortState = { key: string; dir: "asc" | "desc" } | null;
+function nextSort(prev: SortState, key: string): SortState {
+  if (!prev || prev.key !== key) return { key, dir: "asc" };
+  if (prev.dir === "asc") return { key, dir: "desc" };
+  return null;
+}
+
+function isoFromDate(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 export function MyReservationsList() {
   const [items, setItems] = useState<MyReservation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +65,17 @@ export function MyReservationsList() {
   const [cancelTarget, setCancelTarget] = useState<MyReservation | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
+  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+  const [openFilter, setOpenFilter] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortState>(null);
+  // Filtro globale "data esatta" via DatePicker. `null` = nessun filtro.
+  const [dateFilter, setDateFilter] = useState<string | null>(null);
+  const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(undefined);
+
+  useEffect(() => {
+    const lang = navigator.language?.toLowerCase() ?? "";
+    if (lang.startsWith("it")) setDatePickerLocale(Italian);
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -65,15 +105,40 @@ export function MyReservationsList() {
     }
   }
 
+  // `typeLabel` viene normalizzato così l'utente può filtrare digitando
+  // "auto"/"scrivania" anziché "PARKING"/"DESK" (etichette mostrate nella UI).
   const rows = items.map((r) => ({
     id: r.id,
     date: formatDate(r.date),
     type: r.spot.type,
+    typeLabel: r.spot.type === "PARKING" ? "Posto auto" : "Scrivania",
     code: r.spot.code,
     site: r.spot.floor.site.name,
     floor: r.spot.floor.name,
     zone: r.spot.zone?.name ?? "—",
   }));
+
+  const filteredRows = rows.filter((r) => {
+    if (dateFilter && r.date !== dateFilter) return false;
+    return Object.entries(colFilters).every(([key, q]) => {
+      if (!q) return true;
+      const cell = key === "type" ? r.typeLabel : String(r[key as keyof typeof r] ?? "");
+      return cell.toLowerCase().includes(q.toLowerCase());
+    });
+  });
+
+  const sortedRows = sort
+    ? [...filteredRows].sort((a, b) => {
+        const k = sort.key === "type" ? "typeLabel" : sort.key;
+        const va = a[k as keyof typeof a];
+        const vb = b[k as keyof typeof b];
+        const cmp = String(va ?? "").localeCompare(String(vb ?? ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+        return sort.dir === "asc" ? cmp : -cmp;
+      })
+    : filteredRows;
 
   return (
     <main>
@@ -81,6 +146,37 @@ export function MyReservationsList() {
       <p style={{ marginBottom: "2rem", color: "#525252" }}>
         Prenotazioni attive — puoi cancellarle in qualsiasi momento.
       </p>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr",
+          gap: "1rem",
+          marginBottom: "2rem",
+          maxWidth: "320px",
+        }}
+      >
+        <DatePicker
+          datePickerType="single"
+          dateFormat="Y-m-d"
+          locale={datePickerLocale}
+          value={dateFilter ?? ""}
+          onChange={(dates: Date[]) => {
+            setDateFilter(dates[0] ? isoFromDate(dates[0]) : null);
+          }}
+        >
+          <DatePickerInput
+            id="my-res-date-filter"
+            labelText="Filtra per data"
+            placeholder="YYYY-MM-DD"
+          />
+        </DatePicker>
+        {dateFilter && (
+          <Button kind="ghost" size="sm" onClick={() => setDateFilter(null)}>
+            Rimuovi filtro data
+          </Button>
+        )}
+      </div>
 
       {error && (
         <InlineNotification
@@ -102,12 +198,23 @@ export function MyReservationsList() {
         />
       )}
 
+      {!loading && rows.length > 0 && filteredRows.length === 0 && (
+        <InlineNotification
+          kind="warning"
+          title="Nessun risultato"
+          subtitle="Nessuna prenotazione corrisponde ai filtri applicati."
+          hideCloseButton
+          lowContrast
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
       {loading ? (
         <InlineLoading description="Carico le prenotazioni…" />
       ) : rows.length === 0 ? (
         <p style={{ color: "#525252" }}>Non hai prenotazioni attive.</p>
       ) : (
-        <DataTable rows={rows} headers={HEADERS}>
+        <DataTable rows={sortedRows} headers={HEADERS}>
           {({ rows: rs, headers, getHeaderProps, getRowProps, getTableProps }) => (
             <TableContainer>
               <Table {...getTableProps()}>
@@ -115,9 +222,88 @@ export function MyReservationsList() {
                   <TableRow>
                     {headers.map((h) => {
                       const { key, ...headerProps } = getHeaderProps({ header: h });
+                      const filterable = FILTERABLE_KEYS.has(h.key);
+                      const sortable = SORTABLE_KEYS.has(h.key);
+                      const value = colFilters[h.key] ?? "";
+                      const isOpen = openFilter === h.key;
+                      const sortDir = sort?.key === h.key ? sort.dir : null;
+                      const SortIcon =
+                        sortDir === "asc" ? ArrowUp : sortDir === "desc" ? ArrowDown : ArrowsVertical;
+                      const sortLabel = sortDir
+                        ? `Ordinato ${sortDir === "asc" ? "crescente" : "decrescente"} — clic per ${
+                            sortDir === "asc" ? "decrescente" : "rimuovere"
+                          }`
+                        : `Ordina ${h.header}`;
                       return (
                         <TableHeader key={key} {...headerProps}>
-                          {h.header}
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "0.25rem",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "0.25rem",
+                              }}
+                            >
+                              <span>{h.header}</span>
+                              {sortable && (
+                                <IconButton
+                                  kind="ghost"
+                                  size="sm"
+                                  label={sortLabel}
+                                  align="bottom"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSort((prev) => nextSort(prev, h.key));
+                                  }}
+                                >
+                                  <SortIcon />
+                                </IconButton>
+                              )}
+                              {filterable && (
+                                <IconButton
+                                  kind="ghost"
+                                  size="sm"
+                                  label={value ? `Filtro attivo: "${value}"` : `Filtra ${h.header}`}
+                                  align="bottom"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenFilter(isOpen ? null : h.key);
+                                  }}
+                                >
+                                  {value ? <FilterEdit /> : <Filter />}
+                                </IconButton>
+                              )}
+                            </div>
+                            {filterable && isOpen && (
+                              <Search
+                                id={`col-filter-${h.key}`}
+                                labelText={`Filtra ${h.header}`}
+                                placeholder="Filtra…"
+                                size="sm"
+                                value={value}
+                                autoFocus
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) =>
+                                  setColFilters((prev) => ({
+                                    ...prev,
+                                    [h.key]: e.target.value,
+                                  }))
+                                }
+                                onClear={() =>
+                                  setColFilters((prev) => {
+                                    const { [h.key]: _, ...rest } = prev;
+                                    return rest;
+                                  })
+                                }
+                              />
+                            )}
+                          </div>
                         </TableHeader>
                       );
                     })}
