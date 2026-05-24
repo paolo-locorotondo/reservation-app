@@ -46,5 +46,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   if (!cachedHandler) {
     cachedHandler = await bootstrap();
   }
+  // Debug temporaneo: cosa vede effettivamente Express dopo che Vercel routing
+  // ha matchato il catch-all? Sospetto che multi-segment non arrivi qui col path
+  // intero. Rimuovere dopo aver chiuso il bug.
+  console.log(`[vercel-fn] method=${req.method} url=${req.url}`);
   cachedHandler(req, res);
 }
