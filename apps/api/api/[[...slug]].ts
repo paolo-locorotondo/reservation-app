@@ -14,16 +14,17 @@
 
 import "reflect-metadata";
 import type { IncomingMessage, ServerResponse } from "http";
-import type { Express } from "express";
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 import { ExpressAdapter } from "@nestjs/platform-express";
 import express from "express";
 import { AppModule } from "../src/app.module";
 
-let cachedHandler: Express | null = null;
+type RequestHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
-async function bootstrap(): Promise<Express> {
+let cachedHandler: RequestHandler | null = null;
+
+async function bootstrap(): Promise<RequestHandler> {
   const expressApp = express();
   const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), {
     cors: false,
@@ -38,12 +39,12 @@ async function bootstrap(): Promise<Express> {
     }),
   );
   await app.init();
-  return expressApp;
+  return expressApp as unknown as RequestHandler;
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   if (!cachedHandler) {
     cachedHandler = await bootstrap();
   }
-  cachedHandler(req as never, res as never);
+  cachedHandler(req, res);
 }
