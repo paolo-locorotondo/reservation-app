@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   DataTable,
   Table,
@@ -10,15 +10,21 @@ import {
   TableBody,
   TableCell,
   TableContainer,
-  Tag,
   Button,
   IconButton,
   InlineLoading,
   InlineNotification,
   Modal,
   Search,
+  Select,
+  SelectItem,
   DatePicker,
   DatePickerInput,
+  Tabs,
+  TabList,
+  Tab,
+  TabPanels,
+  TabPanel,
 } from "@carbon/react";
 import {
   Filter,
@@ -29,20 +35,18 @@ import {
 } from "@carbon/icons-react";
 import { Italian } from "flatpickr/dist/l10n/it.js";
 import type { CustomLocale } from "flatpickr/dist/types/locale";
+import type { SpotType } from "@reservation/shared";
 import { api, ApiError, type MyReservation } from "@/lib/api";
 
 const HEADERS = [
   { key: "date", header: "Data" },
-  { key: "type", header: "Tipo" },
   { key: "code", header: "Codice" },
-  { key: "site", header: "Sede" },
   { key: "floor", header: "Piano" },
   { key: "zone", header: "Zona" },
-  { key: "actions", header: "" },
 ];
 
-const FILTERABLE_KEYS = new Set(["date", "type", "code", "site", "floor", "zone"]);
-const SORTABLE_KEYS = new Set(["date", "type", "code", "site", "floor", "zone"]);
+const FILTERABLE_KEYS = new Set(["date", "code", "floor", "zone"]);
+const SORTABLE_KEYS = new Set(["date", "code", "floor", "zone"]);
 
 type SortState = { key: string; dir: "asc" | "desc" } | null;
 function nextSort(prev: SortState, key: string): SortState {
@@ -57,25 +61,21 @@ function isoFromDate(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
+function formatDate(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  // YYYY-MM-DD in UTC (i Reservation hanno granularità @db.Date salvati a 00:00 UTC)
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function MyReservationsList() {
   const [items, setItems] = useState<MyReservation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [cancelTarget, setCancelTarget] = useState<MyReservation | null>(null);
-  const [cancelling, setCancelling] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
-  const [colFilters, setColFilters] = useState<Record<string, string>>({});
-  const [openFilter, setOpenFilter] = useState<string | null>(null);
-  const [sort, setSort] = useState<SortState>(null);
-  // Filtro globale "data esatta" via DatePicker. `null` = nessun filtro.
-  const [dateFilter, setDateFilter] = useState<string | null>(null);
-  const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(undefined);
-
-  useEffect(() => {
-    const lang = navigator.language?.toLowerCase() ?? "";
-    if (lang.startsWith("it")) setDatePickerLocale(Italian);
-  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -87,96 +87,26 @@ export function MyReservationsList() {
       .finally(() => setLoading(false));
   }, [reloadTick]);
 
-  async function confirmCancel() {
-    if (!cancelTarget) return;
-    setCancelling(true);
-    try {
-      await api.cancelReservation(cancelTarget.id);
-      setSuccessMsg(
-        `Prenotazione del ${formatDate(cancelTarget.date)} (${cancelTarget.spot.code}) cancellata.`,
-      );
-      setCancelTarget(null);
-      setReloadTick((t) => t + 1);
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "Errore imprevisto";
-      setError(`Cancellazione fallita: ${msg}`);
-    } finally {
-      setCancelling(false);
-    }
+  const parkingItems = useMemo(
+    () => items.filter((r) => r.spot.type === "PARKING"),
+    [items],
+  );
+  const deskItems = useMemo(
+    () => items.filter((r) => r.spot.type === "DESK"),
+    [items],
+  );
+
+  function handleCancelled(msg: string) {
+    setSuccessMsg(msg);
+    setReloadTick((t) => t + 1);
   }
-
-  // `typeLabel` viene normalizzato così l'utente può filtrare digitando
-  // "auto"/"scrivania" anziché "PARKING"/"DESK" (etichette mostrate nella UI).
-  const rows = items.map((r) => ({
-    id: r.id,
-    date: formatDate(r.date),
-    type: r.spot.type,
-    typeLabel: r.spot.type === "PARKING" ? "Posto auto" : "Scrivania",
-    code: r.spot.code,
-    site: r.spot.floor.site.name,
-    floor: r.spot.floor.name,
-    zone: r.spot.zone?.name ?? "—",
-  }));
-
-  const filteredRows = rows.filter((r) => {
-    if (dateFilter && r.date !== dateFilter) return false;
-    return Object.entries(colFilters).every(([key, q]) => {
-      if (!q) return true;
-      const cell = key === "type" ? r.typeLabel : String(r[key as keyof typeof r] ?? "");
-      return cell.toLowerCase().includes(q.toLowerCase());
-    });
-  });
-
-  const sortedRows = sort
-    ? [...filteredRows].sort((a, b) => {
-        const k = sort.key === "type" ? "typeLabel" : sort.key;
-        const va = a[k as keyof typeof a];
-        const vb = b[k as keyof typeof b];
-        const cmp = String(va ?? "").localeCompare(String(vb ?? ""), undefined, {
-          numeric: true,
-          sensitivity: "base",
-        });
-        return sort.dir === "asc" ? cmp : -cmp;
-      })
-    : filteredRows;
 
   return (
     <main>
       <h1 style={{ marginBottom: "0.25rem" }}>Le mie prenotazioni</h1>
       <p style={{ marginBottom: "2rem", color: "#525252" }}>
-        Prenotazioni attive — puoi cancellarle in qualsiasi momento.
+        Prenotazioni attive — clicca una riga per cancellare la prenotazione.
       </p>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr",
-          gap: "1rem",
-          marginBottom: "2rem",
-          maxWidth: "320px",
-        }}
-      >
-        <DatePicker
-          datePickerType="single"
-          dateFormat="Y-m-d"
-          locale={datePickerLocale}
-          value={dateFilter ?? ""}
-          onChange={(dates: Date[]) => {
-            setDateFilter(dates[0] ? isoFromDate(dates[0]) : null);
-          }}
-        >
-          <DatePickerInput
-            id="my-res-date-filter"
-            labelText="Filtra per data"
-            placeholder="YYYY-MM-DD"
-          />
-        </DatePicker>
-        {dateFilter && (
-          <Button kind="ghost" size="sm" onClick={() => setDateFilter(null)}>
-            Rimuovi filtro data
-          </Button>
-        )}
-      </div>
 
       {error && (
         <InlineNotification
@@ -198,7 +128,231 @@ export function MyReservationsList() {
         />
       )}
 
-      {!loading && rows.length > 0 && filteredRows.length === 0 && (
+      {loading ? (
+        <InlineLoading description="Carico le prenotazioni…" />
+      ) : items.length === 0 ? (
+        <p style={{ color: "#525252" }}>Non hai prenotazioni attive.</p>
+      ) : (
+        <Tabs>
+          <TabList aria-label="Tipo di prenotazione" contained>
+            <Tab>{`Posti auto (${parkingItems.length})`}</Tab>
+            <Tab>{`Scrivanie (${deskItems.length})`}</Tab>
+          </TabList>
+          <TabPanels>
+            <TabPanel>
+              <ReservationsTab
+                tabKey="PARKING"
+                type="PARKING"
+                items={parkingItems}
+                onCancelled={handleCancelled}
+                onError={(m) => setError(m)}
+              />
+            </TabPanel>
+            <TabPanel>
+              <ReservationsTab
+                tabKey="DESK"
+                type="DESK"
+                items={deskItems}
+                onCancelled={handleCancelled}
+                onError={(m) => setError(m)}
+              />
+            </TabPanel>
+          </TabPanels>
+        </Tabs>
+      )}
+    </main>
+  );
+}
+
+interface ReservationsTabProps {
+  tabKey: string;
+  type: SpotType;
+  items: MyReservation[];
+  onCancelled: (msg: string) => void;
+  onError: (msg: string) => void;
+}
+
+// Sotto-componente per il contenuto di un tab. Ogni istanza ha il proprio
+// stato dei filtri (siteId/floorId/dateFilter/colFilters/sort), così PARKING e
+// DESK sono indipendenti come da spec.
+function ReservationsTab({
+  tabKey,
+  type,
+  items,
+  onCancelled,
+  onError,
+}: ReservationsTabProps) {
+  const [siteFilter, setSiteFilter] = useState<string>("");
+  const [floorFilter, setFloorFilter] = useState<string>("");
+  const [dateFilter, setDateFilter] = useState<string | null>(null);
+  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+  const [openFilter, setOpenFilter] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortState>(null);
+  const [cancelTarget, setCancelTarget] = useState<MyReservation | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(
+    undefined,
+  );
+
+  useEffect(() => {
+    const lang = navigator.language?.toLowerCase() ?? "";
+    if (lang.startsWith("it")) setDatePickerLocale(Italian);
+  }, []);
+
+  // Derivare sedi/piani dalle prenotazioni dell'utente: ha senso solo offrire
+  // come filtro le opzioni di cui esistono prenotazioni.
+  const sites = useMemo(() => {
+    const map = new Map<string, { id: string; name: string }>();
+    for (const r of items) map.set(r.spot.floor.site.id, r.spot.floor.site);
+    return Array.from(map.values());
+  }, [items]);
+
+  const floors = useMemo(() => {
+    const map = new Map<string, { id: string; name: string }>();
+    for (const r of items) {
+      if (siteFilter && r.spot.floor.site.id !== siteFilter) continue;
+      map.set(r.spot.floor.id, { id: r.spot.floor.id, name: r.spot.floor.name });
+    }
+    return Array.from(map.values());
+  }, [items, siteFilter]);
+
+  // Reset del piano quando cambia la sede (il piano selezionato potrebbe non
+  // essere più valido per la nuova sede).
+  useEffect(() => {
+    if (!floorFilter) return;
+    if (!floors.some((f) => f.id === floorFilter)) setFloorFilter("");
+  }, [floors, floorFilter]);
+
+  const filtered = items.filter((r) => {
+    if (siteFilter && r.spot.floor.site.id !== siteFilter) return false;
+    if (floorFilter && r.spot.floor.id !== floorFilter) return false;
+    if (dateFilter && formatDate(r.date) !== dateFilter) return false;
+    return true;
+  });
+
+  const rows = filtered.map((r) => ({
+    id: r.id,
+    date: formatDate(r.date),
+    code: r.spot.code,
+    floor: r.spot.floor.name,
+    zone: r.spot.zone?.name ?? "—",
+  }));
+
+  const filteredRows = rows.filter((r) =>
+    Object.entries(colFilters).every(([key, q]) => {
+      if (!q) return true;
+      const cell = String(r[key as keyof typeof r] ?? "");
+      return cell.toLowerCase().includes(q.toLowerCase());
+    }),
+  );
+
+  const sortedRows = sort
+    ? [...filteredRows].sort((a, b) => {
+        const k = sort.key as keyof typeof a;
+        const cmp = String(a[k] ?? "").localeCompare(String(b[k] ?? ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+        return sort.dir === "asc" ? cmp : -cmp;
+      })
+    : filteredRows;
+
+  async function confirmCancel() {
+    if (!cancelTarget) return;
+    setCancelling(true);
+    try {
+      await api.cancelReservation(cancelTarget.id);
+      onCancelled(
+        `Prenotazione del ${formatDate(cancelTarget.date)} (${cancelTarget.spot.code}) cancellata.`,
+      );
+      setCancelTarget(null);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "Errore imprevisto";
+      onError(`Cancellazione fallita: ${msg}`);
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  const typeLabel = type === "PARKING" ? "posto auto" : "scrivania";
+
+  return (
+    <>
+      <div className="rsv-filter-grid">
+        <Select
+          id={`site-filter-${tabKey}`}
+          labelText="Sede"
+          value={siteFilter}
+          onChange={(e) => setSiteFilter(e.target.value)}
+        >
+          <SelectItem value="" text="Tutte le sedi" />
+          {sites.map((s) => (
+            <SelectItem key={s.id} value={s.id} text={s.name} />
+          ))}
+        </Select>
+        <Select
+          id={`floor-filter-${tabKey}`}
+          labelText="Piano"
+          value={floorFilter}
+          onChange={(e) => setFloorFilter(e.target.value)}
+        >
+          <SelectItem value="" text="Tutti i piani" />
+          {floors.map((f) => (
+            <SelectItem key={f.id} value={f.id} text={f.name} />
+          ))}
+        </Select>
+        <DatePicker
+          datePickerType="single"
+          dateFormat="Y-m-d"
+          locale={datePickerLocale}
+          value={dateFilter ?? ""}
+          onChange={(dates: Date[]) => {
+            setDateFilter(dates[0] ? isoFromDate(dates[0]) : null);
+          }}
+        >
+          <DatePickerInput
+            id={`date-filter-${tabKey}`}
+            labelText="Data"
+            placeholder="YYYY-MM-DD"
+          />
+        </DatePicker>
+      </div>
+
+      <div className="rsv-secondary-filter">
+        <Search
+          id={`zone-filter-${tabKey}`}
+          labelText="Filtra per zona"
+          placeholder="Cerca zona…"
+          size="md"
+          value={colFilters.zone ?? ""}
+          onChange={(e) =>
+            setColFilters((prev) => ({ ...prev, zone: e.target.value }))
+          }
+          onClear={() =>
+            setColFilters((prev) => {
+              const { zone: _, ...rest } = prev;
+              return rest;
+            })
+          }
+        />
+      </div>
+
+      {(siteFilter || floorFilter || dateFilter) && (
+        <Button
+          kind="ghost"
+          size="sm"
+          onClick={() => {
+            setSiteFilter("");
+            setFloorFilter("");
+            setDateFilter(null);
+          }}
+          style={{ marginBottom: "1rem" }}
+        >
+          Rimuovi filtri
+        </Button>
+      )}
+
+      {items.length > 0 && filteredRows.length === 0 && (
         <InlineNotification
           kind="warning"
           title="Nessun risultato"
@@ -209,10 +363,10 @@ export function MyReservationsList() {
         />
       )}
 
-      {loading ? (
-        <InlineLoading description="Carico le prenotazioni…" />
-      ) : rows.length === 0 ? (
-        <p style={{ color: "#525252" }}>Non hai prenotazioni attive.</p>
+      {items.length === 0 ? (
+        <p style={{ color: "#525252" }}>
+          Nessuna prenotazione attiva per questo tipo.
+        </p>
       ) : (
         <DataTable rows={sortedRows} headers={HEADERS}>
           {({ rows: rs, headers, getHeaderProps, getRowProps, getTableProps }) => (
@@ -228,7 +382,11 @@ export function MyReservationsList() {
                       const isOpen = openFilter === h.key;
                       const sortDir = sort?.key === h.key ? sort.dir : null;
                       const SortIcon =
-                        sortDir === "asc" ? ArrowUp : sortDir === "desc" ? ArrowDown : ArrowsVertical;
+                        sortDir === "asc"
+                          ? ArrowUp
+                          : sortDir === "desc"
+                            ? ArrowDown
+                            : ArrowsVertical;
                       const sortLabel = sortDir
                         ? `Ordinato ${sortDir === "asc" ? "crescente" : "decrescente"} — clic per ${
                             sortDir === "asc" ? "decrescente" : "rimuovere"
@@ -269,7 +427,11 @@ export function MyReservationsList() {
                                 <IconButton
                                   kind="ghost"
                                   size="sm"
-                                  label={value ? `Filtro attivo: "${value}"` : `Filtra ${h.header}`}
+                                  label={
+                                    value
+                                      ? `Filtro attivo: "${value}"`
+                                      : `Filtra ${h.header}`
+                                  }
                                   align="bottom"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -282,7 +444,7 @@ export function MyReservationsList() {
                             </div>
                             {filterable && isOpen && (
                               <Search
-                                id={`col-filter-${h.key}`}
+                                id={`col-filter-${tabKey}-${h.key}`}
                                 labelText={`Filtra ${h.header}`}
                                 placeholder="Filtra…"
                                 size="sm"
@@ -314,35 +476,16 @@ export function MyReservationsList() {
                     const { key: rowKey, ...rowProps } = getRowProps({ row });
                     const original = items.find((i) => i.id === row.id);
                     return (
-                      <TableRow key={rowKey} {...rowProps}>
-                        {row.cells.map((cell) => {
-                          if (cell.info.header === "type") {
-                            const t = cell.value as string;
-                            return (
-                              <TableCell key={cell.id}>
-                                <Tag type={t === "PARKING" ? "blue" : "purple"}>
-                                  {t === "PARKING" ? "Posto auto" : "Scrivania"}
-                                </Tag>
-                              </TableCell>
-                            );
-                          }
-                          if (cell.info.header === "actions") {
-                            return (
-                              <TableCell key={cell.id}>
-                                <Button
-                                  size="sm"
-                                  kind="danger--tertiary"
-                                  onClick={() => original && setCancelTarget(original)}
-                                >
-                                  Cancella
-                                </Button>
-                              </TableCell>
-                            );
-                          }
-                          return (
-                            <TableCell key={cell.id}>{String(cell.value)}</TableCell>
-                          );
-                        })}
+                      <TableRow
+                        key={rowKey}
+                        {...rowProps}
+                        className="rsv-row-clickable"
+                        onClick={() => original && setCancelTarget(original)}
+                        title="Clicca per cancellare la prenotazione"
+                      >
+                        {row.cells.map((cell) => (
+                          <TableCell key={cell.id}>{String(cell.value)}</TableCell>
+                        ))}
                       </TableRow>
                     );
                   })}
@@ -367,22 +510,13 @@ export function MyReservationsList() {
       >
         {cancelTarget && (
           <p>
-            Stai per cancellare la prenotazione di{" "}
+            Stai per cancellare la prenotazione del {typeLabel}{" "}
             <strong>{cancelTarget.spot.code}</strong> per il{" "}
             <strong>{formatDate(cancelTarget.date)}</strong>. L&apos;operazione è
             immediata.
           </p>
         )}
       </Modal>
-    </main>
+    </>
   );
-}
-
-function formatDate(iso: string | Date): string {
-  const d = typeof iso === "string" ? new Date(iso) : iso;
-  // YYYY-MM-DD in UTC (i Reservation hanno granularità @db.Date salvati a 00:00 UTC)
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }

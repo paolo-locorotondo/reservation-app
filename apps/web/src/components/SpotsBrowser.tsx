@@ -197,6 +197,40 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
         </DatePicker>
       </div>
 
+      {/* Filtro Zona esterno: utile soprattutto su mobile dove la colonna è
+          comunque visibile ma il popover dell'header può essere scomodo da
+          aprire. È bound allo stesso `colFilters.zone` del filtro per-colonna,
+          così i due input restano sincronizzati. */}
+      <div className="rsv-secondary-filter">
+        <Search
+          id="zone-filter-external"
+          labelText="Filtra per zona"
+          placeholder="Cerca zona…"
+          size="md"
+          value={colFilters.zone ?? ""}
+          onChange={(e) =>
+            setColFilters((prev) => ({ ...prev, zone: e.target.value }))
+          }
+          onClear={() =>
+            setColFilters((prev) => {
+              const { zone: _, ...rest } = prev;
+              return rest;
+            })
+          }
+        />
+      </div>
+
+      <div className="rsv-legend" aria-label="Legenda colori">
+        <span className="rsv-legend-item">
+          <span className="rsv-legend-swatch rsv-legend-swatch--available" />
+          Disponibile
+        </span>
+        <span className="rsv-legend-item">
+          <span className="rsv-legend-swatch rsv-legend-swatch--occupied" />
+          Occupato
+        </span>
+      </div>
+
       {error && (
         <InlineNotification
           kind="error"

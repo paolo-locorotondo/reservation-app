@@ -5,7 +5,7 @@ export default function DesksPage() {
     <SpotsBrowser
       type="DESK"
       title="Scrivanie"
-      subtitle="Filtra per sede, piano e data per vedere le scrivanie disponibili."
+      subtitle="Filtra per sede, piano e data, poi clicca una riga verde per prenotare la scrivania."
     />
   );
 }

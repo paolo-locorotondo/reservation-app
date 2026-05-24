@@ -5,7 +5,7 @@ export default function ParkingPage() {
     <SpotsBrowser
       type="PARKING"
       title="Posti auto"
-      subtitle="Filtra per sede, piano e data per vedere i posti disponibili."
+      subtitle="Filtra per sede, piano e data, poi clicca una riga verde per prenotare il posto."
     />
   );
 }

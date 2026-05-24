@@ -34,6 +34,25 @@ main {
   gap: 1rem;
   margin-bottom: 2rem;
   max-width: 900px;
+
+  // Le celle della grid devono potersi restringere: senza min-width:0 i Select
+  // di Carbon (che hanno larghezza intrinseca dal contenuto) sporgono a destra.
+  & > * {
+    min-width: 0;
+  }
+
+  // DatePicker di Carbon: il wrapper flatpickr ha width:auto e l'input ha una
+  // larghezza fissa (~288px). Forziamo l'intera catena di wrapper + input a
+  // riempire la cella, così resta allineato a Sede/Piano.
+  .cds--date-picker,
+  .cds--date-picker-container,
+  .cds--date-picker--single,
+  .cds--date-picker-input__wrapper {
+    width: 100%;
+  }
+  .cds--date-picker__input {
+    width: 100%;
+  }
 }
 @media (max-width: 671px) {
   .rsv-filter-grid {
@@ -80,4 +99,58 @@ main {
     background-color: #fff1f1 !important; // Carbon red-10
     color: #525252;
   }
+}
+
+// Riga cliccabile neutra (usata in "Le mie prenotazioni"): nessun colore di
+// stato, solo affordance hover/cursore per indicare che il click apre la modal.
+.rsv-row-clickable {
+  cursor: pointer;
+  & > td {
+    transition: background-color 120ms ease;
+  }
+  &:hover > td {
+    background-color: #e8e8e8 !important; // Carbon gray-20
+  }
+}
+
+// Filtro secondario (Zona) collocato fuori dalla griglia principale: utile in
+// particolare su mobile perché il popover dell'header è scomodo da raggiungere.
+.rsv-secondary-filter {
+  max-width: 300px;
+  margin-bottom: 1.5rem;
+}
+@media (max-width: 671px) {
+  .rsv-secondary-filter {
+    max-width: 100%;
+  }
+}
+
+// Legenda colori per le tabelle posti: campioncini quadrati + etichetta.
+.rsv-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+  color: #525252;
+}
+.rsv-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.rsv-legend-swatch {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 2px;
+  border: 1px solid transparent;
+}
+.rsv-legend-swatch--available {
+  background-color: #defbe6; // Carbon green-10
+  border-color: #a7f0ba;     // Carbon green-20
+}
+.rsv-legend-swatch--occupied {
+  background-color: #fff1f1; // Carbon red-10
+  border-color: #ffd7d9;     // Carbon red-20
 }
