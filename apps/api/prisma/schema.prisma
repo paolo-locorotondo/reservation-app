@@ -2,7 +2,11 @@
 // See plan: ../../../C:/Users/PAOLOLOCOROTONDO/.claude/plans/twinkling-humming-whisper.md
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // "native" per lo sviluppo locale (Windows/macOS), "rhel-openssl-3.0.x" per il
+  // runtime Linux di Vercel (Node 20). Senza questo target, in produzione
+  // Prisma fallisce con "Query engine binary for current platform not found".
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

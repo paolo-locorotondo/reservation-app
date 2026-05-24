@@ -1,0 +1,8 @@
+# File non necessari al runtime serverless: riducono la dimensione del bundle
+# (Vercel ha un limite di 250MB unzipped per Function).
+prisma/seed.ts
+prisma/migrations/
+test/
+coverage/
+*.spec.ts
+*.test.ts
