@@ -5,7 +5,7 @@
   "description": "NestJS backend API",
   "scripts": {
     "build": "nest build",
-    "prebuild": "pnpm --filter @reservation/shared build",
+    "prebuild": "pnpm --filter @reservation/shared build && prisma generate",
     "predev": "pnpm --filter @reservation/shared build",
     "dev": "dotenv -e ../../.env -- nest start --watch",
     "start": "dotenv -e ../../.env -- node dist/main",

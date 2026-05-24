@@ -6,8 +6,12 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Usato da `prisma migrate` e `prisma db push`. Su Supabase punta al
+  // Session pooler (porta 5432) o alla Direct connection; NON al Transaction
+  // pooler (6543), che non supporta advisory lock e fa hangare la migrate.
+  directUrl = env("DIRECT_URL")
 }
 
 enum Role {
