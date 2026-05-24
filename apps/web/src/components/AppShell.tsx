@@ -34,7 +34,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <>
       <HeaderContainer
-        render={({ isSideNavExpanded, onClickSideNavExpand }) => (
+        render={({
+          isSideNavExpanded,
+          onClickSideNavExpand,
+        }: {
+          isSideNavExpanded: boolean;
+          onClickSideNavExpand: () => void;
+        }) => (
           <Header aria-label="Reservation App">
             <SkipToContent />
             {/* HeaderMenuButton: Carbon lo mostra solo sotto il breakpoint lg
