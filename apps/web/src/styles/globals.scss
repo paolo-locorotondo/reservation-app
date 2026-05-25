@@ -178,3 +178,106 @@ main {
   background-color: #fff1f1; // Carbon red-10
   border-color: #ffd7d9;     // Carbon red-20
 }
+
+// Chip cliccabili della legenda interattiva: pillole con stato pressed.
+// Quando attive, il bordo si colora coerente con lo swatch (verde/rosso).
+.rsv-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  background: transparent;
+  border: 1px solid #c6c6c6;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  color: #525252;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+
+  &:hover {
+    background-color: #f4f4f4;
+  }
+  &:focus-visible {
+    outline: 2px solid #0f62fe; // Carbon focus blue
+    outline-offset: 2px;
+  }
+
+  &[aria-pressed="true"] {
+    background-color: #f4f4f4;
+    color: #161616;
+    font-weight: 600;
+  }
+  // La prima chip è "Disponibile", la seconda "Occupato": coloriamo il bordo
+  // quando attive in modo coerente con gli swatches.
+  &:nth-of-type(1)[aria-pressed="true"] {
+    border-color: #24a148; // Carbon green-50
+    box-shadow: inset 0 0 0 1px #24a148;
+  }
+  &:nth-of-type(2)[aria-pressed="true"] {
+    border-color: #da1e28; // Carbon red-60
+    box-shadow: inset 0 0 0 1px #da1e28;
+  }
+}
+
+// Pannello filtri collassabile: bottone-toggle full-width che rivela/nasconde
+// il blocco filtri sottostante. Su mobile parte collassato, mostrando solo il
+// summary testuale + il badge col numero di filtri attivi.
+.rsv-filters-panel {
+  margin-bottom: 1rem;
+}
+.rsv-filters-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: #f4f4f4;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.875rem;
+  color: #161616;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 120ms ease;
+
+  &:hover {
+    background-color: #e8e8e8;
+  }
+  &:focus-visible {
+    outline: 2px solid #0f62fe;
+    outline-offset: -2px;
+  }
+}
+.rsv-filters-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.rsv-filters-summary {
+  flex: 1;
+  min-width: 0;
+  color: #525252;
+  font-size: 0.875rem;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rsv-filters-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  color: #525252;
+}
+.rsv-filters-body {
+  margin-top: 1rem;
+}

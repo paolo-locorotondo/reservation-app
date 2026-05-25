@@ -39,28 +39,6 @@ Decisione da prendere: **unificare** o **lasciare separato**? Nel dubbio, postic
 - **Priority**: 🟢 LOW
 - **Stato**: 🔴 TODO
 
-## Pannello filtri collassabile
-
-Sopra le tabelle (`SpotsBrowser`, `MyReservationsList`) il blocco filtri Sede/Piano/Data + filtro secondario Zona occupa parecchio spazio verticale, soprattutto su mobile dove la tabella resta sotto il fold.
-
-- Avvolgere `.rsv-filter-grid` + `.rsv-secondary-filter` in un componente collassabile (probabilmente Carbon `Accordion` con un solo `AccordionItem`, o un toggle custom con icona chevron).
-- Stato di default: **espanso su desktop, collassato su mobile** (`@media (max-width: 671px)` setta lo stato iniziale).
-- Quando è collassato e ci sono filtri attivi, mostrare un riepilogo testuale (es. "Sede: Bari · Piano 2 · 2026-05-26") e un badge col numero di filtri attivi, così l'utente sa che la lista è filtrata anche senza espandere.
-- **Priority**: 🟡 MED (utile ma non bloccante)
-- **Stato**: 🔴 TODO
-
-## Legenda con conteggi + filtro per stato
-
-Estendere la legenda di `SpotsBrowser` da decorativa a interattiva.
-
-- Mostrare il conteggio: `Disponibile (N)` / `Occupato (M)`, calcolato sui `filteredRows` (così riflette i filtri colonna).
-- Cliccando "Disponibile" filtra solo le righe `available`; cliccando "Occupato" solo le `!available`. Terzo click rimuove il filtro stato (ciclo come il sort).
-- Visivamente: i due item della legenda diventano pillole/chip cliccabili (`button` con `aria-pressed`), evidenziate quando attive.
-- Aggiungere uno stato `statusFilter: "AVAILABLE" | "OCCUPIED" | null` in `SpotsBrowser` e applicarlo nello step di filtraggio (prima di `colFilters`).
-- Si applica solo a `SpotsBrowser` (in `MyReservationsList` tutto è ACTIVE per definizione, non ha senso).
-- **Priority**: 🟡 MED
-- **Stato**: 🔴 TODO
-
 ## Concorrenza prenotazioni — verifica e hardening
 
 Verifica fatta sul codice attuale (`apps/api/src/reservations/reservations.service.ts`):

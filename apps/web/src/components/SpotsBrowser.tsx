@@ -18,6 +18,7 @@ import {
   InlineNotification,
   IconButton,
   Search,
+  Button,
 } from "@carbon/react";
 import { Filter, FilterEdit, ArrowsVertical, ArrowUp, ArrowDown } from "@carbon/icons-react";
 import { Italian } from "flatpickr/dist/l10n/it.js";
@@ -25,6 +26,7 @@ import type { CustomLocale } from "flatpickr/dist/types/locale";
 import type { Site, Floor, SpotType, SpotWithAvailability } from "@reservation/shared";
 import { api, ApiError } from "@/lib/api";
 import { BookingDialog, type BookingTarget } from "./BookingDialog";
+import { FiltersPanel } from "./FiltersPanel";
 
 interface Props {
   type: SpotType;
@@ -45,6 +47,12 @@ type SortState = { key: string; dir: "asc" | "desc" } | null;
 function nextSort(prev: SortState, key: string): SortState {
   if (!prev || prev.key !== key) return { key, dir: "asc" };
   if (prev.dir === "asc") return { key, dir: "desc" };
+  return null;
+}
+
+type StatusFilter = "AVAILABLE" | "OCCUPIED" | null;
+function nextStatus(prev: StatusFilter, target: "AVAILABLE" | "OCCUPIED"): StatusFilter {
+  if (prev !== target) return target;
   return null;
 }
 
@@ -78,6 +86,7 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
   const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
   // Locale Flatpickr derivato dal browser. Lo settiamo dopo il mount per evitare
   // mismatch SSR (`navigator` non esiste lato server).
   const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(undefined);
@@ -133,13 +142,29 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
     zone: s.zoneName ?? "—",
   }));
 
-  const filteredRows = rows.filter((r) =>
+  const matchesColFilters = (r: (typeof rows)[number]) =>
     Object.entries(colFilters).every(([key, q]) => {
       if (!q) return true;
       const cell = String(r[key as keyof typeof r] ?? "");
       return cell.toLowerCase().includes(q.toLowerCase());
-    }),
-  );
+    });
+
+  // Conteggi calcolati sul set filtrato solo per colonne (non per stato), così
+  // che cliccare un chip non azzeri il conteggio dell'altro.
+  const colOnlyRows = rows.filter(matchesColFilters);
+  const availableCount = colOnlyRows.filter(
+    (r) => spots.find((s) => s.id === r.id)?.available,
+  ).length;
+  const occupiedCount = colOnlyRows.length - availableCount;
+
+  const statusFilteredRows = statusFilter
+    ? rows.filter((r) => {
+        const available = spots.find((s) => s.id === r.id)?.available ?? false;
+        return statusFilter === "AVAILABLE" ? available : !available;
+      })
+    : rows;
+
+  const filteredRows = statusFilteredRows.filter(matchesColFilters);
 
   const sortedRows = sort
     ? [...filteredRows].sort((a, b) => {
@@ -152,83 +177,127 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
       })
     : filteredRows;
 
+  const defaultSiteId = sites[0]?.id ?? "";
+  const filtersActive =
+    siteId !== defaultSiteId ||
+    floorId !== "" ||
+    date !== todayIso() ||
+    statusFilter !== null ||
+    Object.values(colFilters).some((v) => v && v.length > 0);
+
+  function resetFilters() {
+    setSiteId(defaultSiteId);
+    setFloorId("");
+    setDate(todayIso());
+    setStatusFilter(null);
+    setColFilters({});
+    setOpenFilter(null);
+  }
+
   return (
     <main>
       <h1 style={{ marginBottom: "0.25rem" }}>{title}</h1>
       <p style={{ marginBottom: "2rem", color: "#525252" }}>{subtitle}</p>
 
-      <div className="rsv-filter-grid">
-        <Select
-          id="site-select"
-          labelText="Sede"
-          value={siteId}
-          onChange={(e) => setSiteId(e.target.value)}
-        >
-          {sites.map((s) => (
-            <SelectItem key={s.id} value={s.id} text={s.name} />
-          ))}
-        </Select>
-        <Select
-          id="floor-select"
-          labelText="Piano"
-          value={floorId}
-          onChange={(e) => setFloorId(e.target.value)}
-        >
-          <SelectItem value="" text="Tutti i piani" />
-          {floors.map((f) => (
-            <SelectItem key={f.id} value={f.id} text={f.name} />
-          ))}
-        </Select>
-        <DatePicker
-          datePickerType="single"
-          dateFormat="Y-m-d"
-          locale={datePickerLocale}
-          value={date}
-          minDate={todayIso()}
-          onChange={(dates: Date[]) => {
-            if (dates[0]) setDate(isoFromDate(dates[0]));
-          }}
-        >
-          <DatePickerInput
-            id="date-picker"
-            labelText="Data"
-            placeholder="YYYY-MM-DD"
+      <FiltersPanel
+        summary={`Sede: ${sites.find((s) => s.id === siteId)?.name ?? "—"} · Piano: ${
+          floorId ? floors.find((f) => f.id === floorId)?.name ?? "—" : "Tutti"
+        } · Data: ${date}`}
+        activeCount={
+          (floorId ? 1 : 0) +
+          Object.values(colFilters).filter((v) => v && v.length > 0).length +
+          (statusFilter ? 1 : 0)
+        }
+      >
+        <div className="rsv-filter-grid">
+          <Select
+            id="site-select"
+            labelText="Sede"
+            value={siteId}
+            onChange={(e) => setSiteId(e.target.value)}
+          >
+            {sites.map((s) => (
+              <SelectItem key={s.id} value={s.id} text={s.name} />
+            ))}
+          </Select>
+          <Select
+            id="floor-select"
+            labelText="Piano"
+            value={floorId}
+            onChange={(e) => setFloorId(e.target.value)}
+          >
+            <SelectItem value="" text="Tutti i piani" />
+            {floors.map((f) => (
+              <SelectItem key={f.id} value={f.id} text={f.name} />
+            ))}
+          </Select>
+          <DatePicker
+            datePickerType="single"
+            dateFormat="Y-m-d"
+            locale={datePickerLocale}
+            value={date}
+            minDate={todayIso()}
+            onChange={(dates: Date[]) => {
+              if (dates[0]) setDate(isoFromDate(dates[0]));
+            }}
+          >
+            <DatePickerInput
+              id="date-picker"
+              labelText="Data"
+              placeholder="YYYY-MM-DD"
+            />
+          </DatePicker>
+        </div>
+
+        {/* Filtro Zona esterno: utile soprattutto su mobile dove la colonna è
+            comunque visibile ma il popover dell'header può essere scomodo da
+            aprire. È bound allo stesso `colFilters.zone` del filtro per-colonna,
+            così i due input restano sincronizzati. */}
+        <div className="rsv-secondary-filter">
+          <Search
+            id="zone-filter-external"
+            labelText="Filtra per zona"
+            placeholder="Cerca zona…"
+            size="md"
+            value={colFilters.zone ?? ""}
+            onChange={(e) =>
+              setColFilters((prev) => ({ ...prev, zone: e.target.value }))
+            }
+            onClear={() =>
+              setColFilters((prev) => {
+                const { zone: _, ...rest } = prev;
+                return rest;
+              })
+            }
           />
-        </DatePicker>
-      </div>
+        </div>
 
-      {/* Filtro Zona esterno: utile soprattutto su mobile dove la colonna è
-          comunque visibile ma il popover dell'header può essere scomodo da
-          aprire. È bound allo stesso `colFilters.zone` del filtro per-colonna,
-          così i due input restano sincronizzati. */}
-      <div className="rsv-secondary-filter">
-        <Search
-          id="zone-filter-external"
-          labelText="Filtra per zona"
-          placeholder="Cerca zona…"
-          size="md"
-          value={colFilters.zone ?? ""}
-          onChange={(e) =>
-            setColFilters((prev) => ({ ...prev, zone: e.target.value }))
-          }
-          onClear={() =>
-            setColFilters((prev) => {
-              const { zone: _, ...rest } = prev;
-              return rest;
-            })
-          }
-        />
-      </div>
+        {filtersActive && (
+          <Button kind="ghost" size="sm" onClick={resetFilters}>
+            Reset filtri
+          </Button>
+        )}
+      </FiltersPanel>
 
-      <div className="rsv-legend" aria-label="Legenda colori">
-        <span className="rsv-legend-item">
+      <div className="rsv-legend" aria-label="Filtra per stato">
+        <button
+          type="button"
+          className="rsv-legend-chip"
+          aria-pressed={statusFilter === "AVAILABLE"}
+          onClick={() => setStatusFilter((p) => nextStatus(p, "AVAILABLE"))}
+        >
           <span className="rsv-legend-swatch rsv-legend-swatch--available" />
-          Disponibile
-        </span>
-        <span className="rsv-legend-item">
+          Disponibile ({availableCount})
+        </button>
+        <button
+          type="button"
+          className="rsv-legend-chip"
+          aria-pressed={statusFilter === "OCCUPIED"}
+          onClick={() => setStatusFilter((p) => nextStatus(p, "OCCUPIED"))}
+        >
           <span className="rsv-legend-swatch rsv-legend-swatch--occupied" />
-          Occupato
-        </span>
+          Occupato ({occupiedCount})
+        </button>
       </div>
 
       {error && (

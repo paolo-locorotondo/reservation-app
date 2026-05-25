@@ -37,6 +37,7 @@ import { Italian } from "flatpickr/dist/l10n/it.js";
 import type { CustomLocale } from "flatpickr/dist/types/locale";
 import type { SpotType } from "@reservation/shared";
 import { api, ApiError, type MyReservation } from "@/lib/api";
+import { FiltersPanel } from "./FiltersPanel";
 
 const HEADERS = [
   { key: "date", header: "Data" },
@@ -276,81 +277,96 @@ function ReservationsTab({
 
   const typeLabel = type === "PARKING" ? "posto auto" : "scrivania";
 
+  const siteName = sites.find((s) => s.id === siteFilter)?.name;
+  const floorName = floors.find((f) => f.id === floorFilter)?.name;
+  const filtersSummary = `Sede: ${siteName ?? "Tutte"} · Piano: ${floorName ?? "Tutti"} · Data: ${dateFilter ?? "Tutte"}`;
+  const filtersActiveCount =
+    (siteFilter ? 1 : 0) +
+    (floorFilter ? 1 : 0) +
+    (dateFilter ? 1 : 0) +
+    Object.values(colFilters).filter((v) => v && v.length > 0).length;
+
   return (
     <>
-      <div className="rsv-filter-grid">
-        <Select
-          id={`site-filter-${tabKey}`}
-          labelText="Sede"
-          value={siteFilter}
-          onChange={(e) => setSiteFilter(e.target.value)}
-        >
-          <SelectItem value="" text="Tutte le sedi" />
-          {sites.map((s) => (
-            <SelectItem key={s.id} value={s.id} text={s.name} />
-          ))}
-        </Select>
-        <Select
-          id={`floor-filter-${tabKey}`}
-          labelText="Piano"
-          value={floorFilter}
-          onChange={(e) => setFloorFilter(e.target.value)}
-        >
-          <SelectItem value="" text="Tutti i piani" />
-          {floors.map((f) => (
-            <SelectItem key={f.id} value={f.id} text={f.name} />
-          ))}
-        </Select>
-        <DatePicker
-          datePickerType="single"
-          dateFormat="Y-m-d"
-          locale={datePickerLocale}
-          value={dateFilter ?? ""}
-          onChange={(dates: Date[]) => {
-            setDateFilter(dates[0] ? isoFromDate(dates[0]) : null);
-          }}
-        >
-          <DatePickerInput
-            id={`date-filter-${tabKey}`}
-            labelText="Data"
-            placeholder="YYYY-MM-DD"
+      <FiltersPanel summary={filtersSummary} activeCount={filtersActiveCount}>
+        <div className="rsv-filter-grid">
+          <Select
+            id={`site-filter-${tabKey}`}
+            labelText="Sede"
+            value={siteFilter}
+            onChange={(e) => setSiteFilter(e.target.value)}
+          >
+            <SelectItem value="" text="Tutte le sedi" />
+            {sites.map((s) => (
+              <SelectItem key={s.id} value={s.id} text={s.name} />
+            ))}
+          </Select>
+          <Select
+            id={`floor-filter-${tabKey}`}
+            labelText="Piano"
+            value={floorFilter}
+            onChange={(e) => setFloorFilter(e.target.value)}
+          >
+            <SelectItem value="" text="Tutti i piani" />
+            {floors.map((f) => (
+              <SelectItem key={f.id} value={f.id} text={f.name} />
+            ))}
+          </Select>
+          <DatePicker
+            datePickerType="single"
+            dateFormat="Y-m-d"
+            locale={datePickerLocale}
+            value={dateFilter ?? ""}
+            onChange={(dates: Date[]) => {
+              setDateFilter(dates[0] ? isoFromDate(dates[0]) : null);
+            }}
+          >
+            <DatePickerInput
+              id={`date-filter-${tabKey}`}
+              labelText="Data"
+              placeholder="YYYY-MM-DD"
+            />
+          </DatePicker>
+        </div>
+
+        <div className="rsv-secondary-filter">
+          <Search
+            id={`zone-filter-${tabKey}`}
+            labelText="Filtra per zona"
+            placeholder="Cerca zona…"
+            size="md"
+            value={colFilters.zone ?? ""}
+            onChange={(e) =>
+              setColFilters((prev) => ({ ...prev, zone: e.target.value }))
+            }
+            onClear={() =>
+              setColFilters((prev) => {
+                const { zone: _, ...rest } = prev;
+                return rest;
+              })
+            }
           />
-        </DatePicker>
-      </div>
+        </div>
 
-      <div className="rsv-secondary-filter">
-        <Search
-          id={`zone-filter-${tabKey}`}
-          labelText="Filtra per zona"
-          placeholder="Cerca zona…"
-          size="md"
-          value={colFilters.zone ?? ""}
-          onChange={(e) =>
-            setColFilters((prev) => ({ ...prev, zone: e.target.value }))
-          }
-          onClear={() =>
-            setColFilters((prev) => {
-              const { zone: _, ...rest } = prev;
-              return rest;
-            })
-          }
-        />
-      </div>
-
-      {(siteFilter || floorFilter || dateFilter) && (
-        <Button
-          kind="ghost"
-          size="sm"
-          onClick={() => {
-            setSiteFilter("");
-            setFloorFilter("");
-            setDateFilter(null);
-          }}
-          style={{ marginBottom: "1rem" }}
-        >
-          Rimuovi filtri
-        </Button>
-      )}
+        {(siteFilter ||
+          floorFilter ||
+          dateFilter ||
+          Object.values(colFilters).some((v) => v && v.length > 0)) && (
+          <Button
+            kind="ghost"
+            size="sm"
+            onClick={() => {
+              setSiteFilter("");
+              setFloorFilter("");
+              setDateFilter(null);
+              setColFilters({});
+              setOpenFilter(null);
+            }}
+          >
+            Reset filtri
+          </Button>
+        )}
+      </FiltersPanel>
 
       {items.length > 0 && filteredRows.length === 0 && (
         <InlineNotification
