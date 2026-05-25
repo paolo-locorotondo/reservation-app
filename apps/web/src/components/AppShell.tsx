@@ -2,6 +2,7 @@
 
 import { signOut, useSession } from "next-auth/react";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import {
   Header,
   HeaderContainer,
@@ -11,13 +12,17 @@ import {
   HeaderMenuItem,
   HeaderGlobalBar,
   HeaderGlobalAction,
+  HeaderPanel,
+  Switcher,
+  SwitcherItem,
+  SwitcherDivider,
   SideNav,
   SideNavItems,
   SideNavLink,
   SkipToContent,
   Content,
 } from "@carbon/react";
-import { Logout } from "@carbon/icons-react";
+import { UserAvatar } from "@carbon/icons-react";
 import type { ReactNode } from "react";
 
 const NAV: { label: string; href: string }[] = [
@@ -30,6 +35,34 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { data: session } = useSession();
+  const [userPanelOpen, setUserPanelOpen] = useState(false);
+
+  const displayName = session?.user?.name ?? "";
+  const email = session?.user?.email ?? "";
+
+  // Click-outside per chiudere il pannello utente. HeaderPanel non lo gestisce
+  // nativamente: il pannello e il bottone trigger sono fratelli, quindi un
+  // listener globale che esclude entrambi è la via più pulita.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!userPanelOpen) return;
+    function handleClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (panelRef.current?.contains(t)) return;
+      if (triggerRef.current?.contains(t)) return;
+      setUserPanelOpen(false);
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setUserPanelOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [userPanelOpen]);
 
   return (
     <>
@@ -71,17 +104,43 @@ export function AppShell({ children }: { children: ReactNode }) {
               ))}
             </HeaderNavigation>
             <HeaderGlobalBar>
-              {session?.user?.email && (
-                <span className="rsv-header-email">{session.user.email}</span>
+              {displayName && (
+                <span className="rsv-header-username">{displayName}</span>
               )}
               <HeaderGlobalAction
-                aria-label="Esci"
+                aria-label={userPanelOpen ? "Chiudi menu account" : "Apri menu account"}
                 tooltipAlignment="end"
-                onClick={() => signOut({ callbackUrl: "/login" })}
+                isActive={userPanelOpen}
+                onClick={() => setUserPanelOpen((v) => !v)}
+                ref={triggerRef}
               >
-                <Logout />
+                <UserAvatar />
               </HeaderGlobalAction>
             </HeaderGlobalBar>
+            <HeaderPanel
+              expanded={userPanelOpen}
+              aria-label="Menu account"
+              ref={panelRef}
+            >
+              <Switcher aria-label="Account">
+                <li className="rsv-user-panel-info" role="presentation">
+                  <div className="rsv-user-panel-name">{displayName || email || "Utente"}</div>
+                  {email && email !== displayName && (
+                    <div className="rsv-user-panel-email">{email}</div>
+                  )}
+                </li>
+                <SwitcherDivider />
+                <SwitcherItem
+                  aria-label="Esci"
+                  onClick={() => {
+                    setUserPanelOpen(false);
+                    void signOut({ callbackUrl: "/login" });
+                  }}
+                >
+                  Esci
+                </SwitcherItem>
+              </Switcher>
+            </HeaderPanel>
             <SideNav
               aria-label="Navigazione"
               expanded={isSideNavExpanded}

@@ -60,18 +60,42 @@ main {
   }
 }
 
-// Email utente nella global bar: utile su desktop, ma su mobile occupa spazio
-// che serve al titolo + bottone logout.
-.rsv-header-email {
+// Nome utente nella global bar accanto all'icona account: visibile su desktop,
+// nascosto su mobile per non rubare spazio (l'avatar resta cliccabile e il nome
+// completo è nel pannello account).
+.rsv-header-username {
   font-size: 0.875rem;
-  padding: 0 1rem;
+  padding: 0 0.75rem;
   align-self: center;
   color: #ffffff;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 @media (max-width: 671px) {
-  .rsv-header-email {
+  .rsv-header-username {
     display: none;
   }
+}
+
+// Pannello account (HeaderPanel + Switcher): l'header informativo non è un
+// SwitcherItem cliccabile, quindi sovrascriviamo il padding/colore dello <li>.
+.rsv-user-panel-info {
+  padding: 1rem;
+  color: #f4f4f4;
+  cursor: default;
+}
+.rsv-user-panel-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  word-break: break-word;
+}
+.rsv-user-panel-email {
+  font-size: 0.75rem;
+  color: #c6c6c6;
+  margin-top: 0.25rem;
+  word-break: break-all;
 }
 
 // Stato del posto rappresentato dal colore della riga (al posto di una colonna
