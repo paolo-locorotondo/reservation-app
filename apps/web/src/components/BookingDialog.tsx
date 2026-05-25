@@ -16,9 +16,12 @@ interface Props {
   target: BookingTarget | null;
   onClose: () => void;
   onSuccess: () => void;
+  // Chiamata quando il backend risponde 409 (spot già preso o quota giornaliera).
+  // Il parent può ricaricare la lista per mostrare subito lo stato reale.
+  onConflict?: () => void;
 }
 
-export function BookingDialog({ target, onClose, onSuccess }: Props) {
+export function BookingDialog({ target, onClose, onSuccess, onConflict }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,6 +44,7 @@ export function BookingDialog({ target, onClose, onSuccess }: Props) {
     } catch (e) {
       if (e instanceof ApiError) {
         setError(humanizeError(e));
+        if (e.status === 409) onConflict?.();
       } else {
         setError("Errore imprevisto. Riprova.");
       }

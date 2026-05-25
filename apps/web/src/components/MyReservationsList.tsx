@@ -32,6 +32,7 @@ import {
   ArrowsVertical,
   ArrowUp,
   ArrowDown,
+  Renew,
 } from "@carbon/icons-react";
 import { Italian } from "flatpickr/dist/l10n/it.js";
 import type { CustomLocale } from "flatpickr/dist/types/locale";
@@ -77,6 +78,11 @@ export function MyReservationsList() {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
+  // Carbon Tabs di default è uncontrolled: se smontiamo durante un reload,
+  // al rimontaggio torna al primo tab. Lo rendiamo controllato e teniamo
+  // Tabs sempre montato durante i reload (vedi `isInitialLoad` sotto).
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -85,7 +91,10 @@ export function MyReservationsList() {
       .listMyReservations()
       .then(setItems)
       .catch((e: ApiError) => setError(`Caricamento prenotazioni: ${e.message}`))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setHasLoadedOnce(true);
+      });
   }, [reloadTick]);
 
   const parkingItems = useMemo(
@@ -129,12 +138,15 @@ export function MyReservationsList() {
         />
       )}
 
-      {loading ? (
+      {loading && !hasLoadedOnce ? (
         <InlineLoading description="Carico le prenotazioni…" />
       ) : items.length === 0 ? (
         <p style={{ color: "#525252" }}>Non hai prenotazioni attive.</p>
       ) : (
-        <Tabs>
+        <Tabs
+          selectedIndex={selectedIndex}
+          onChange={({ selectedIndex: i }) => setSelectedIndex(i)}
+        >
           <TabList aria-label="Tipo di prenotazione" contained>
             <Tab>{`Posti auto (${parkingItems.length})`}</Tab>
             <Tab>{`Scrivanie (${deskItems.length})`}</Tab>
@@ -147,6 +159,8 @@ export function MyReservationsList() {
                 items={parkingItems}
                 onCancelled={handleCancelled}
                 onError={(m) => setError(m)}
+                onReload={() => setReloadTick((t) => t + 1)}
+                loading={loading}
               />
             </TabPanel>
             <TabPanel>
@@ -156,6 +170,8 @@ export function MyReservationsList() {
                 items={deskItems}
                 onCancelled={handleCancelled}
                 onError={(m) => setError(m)}
+                onReload={() => setReloadTick((t) => t + 1)}
+                loading={loading}
               />
             </TabPanel>
           </TabPanels>
@@ -171,6 +187,8 @@ interface ReservationsTabProps {
   items: MyReservation[];
   onCancelled: (msg: string) => void;
   onError: (msg: string) => void;
+  onReload: () => void;
+  loading: boolean;
 }
 
 // Sotto-componente per il contenuto di un tab. Ogni istanza ha il proprio
@@ -182,6 +200,8 @@ function ReservationsTab({
   items,
   onCancelled,
   onError,
+  onReload,
+  loading,
 }: ReservationsTabProps) {
   const [siteFilter, setSiteFilter] = useState<string>("");
   const [floorFilter, setFloorFilter] = useState<string>("");
@@ -367,6 +387,19 @@ function ReservationsTab({
           </Button>
         )}
       </FiltersPanel>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+        <IconButton
+          kind="ghost"
+          size="sm"
+          label="Aggiorna prenotazioni"
+          align="bottom-right"
+          onClick={onReload}
+          disabled={loading}
+        >
+          <Renew />
+        </IconButton>
+      </div>
 
       {items.length > 0 && filteredRows.length === 0 && (
         <InlineNotification

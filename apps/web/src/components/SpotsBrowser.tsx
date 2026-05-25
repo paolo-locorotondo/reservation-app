@@ -20,7 +20,7 @@ import {
   Search,
   Button,
 } from "@carbon/react";
-import { Filter, FilterEdit, ArrowsVertical, ArrowUp, ArrowDown } from "@carbon/icons-react";
+import { Filter, FilterEdit, ArrowsVertical, ArrowUp, ArrowDown, Renew } from "@carbon/icons-react";
 import { Italian } from "flatpickr/dist/l10n/it.js";
 import type { CustomLocale } from "flatpickr/dist/types/locale";
 import type { Site, Floor, SpotType, SpotWithAvailability } from "@reservation/shared";
@@ -279,25 +279,37 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
         )}
       </FiltersPanel>
 
-      <div className="rsv-legend" aria-label="Filtra per stato">
-        <button
-          type="button"
-          className="rsv-legend-chip"
-          aria-pressed={statusFilter === "AVAILABLE"}
-          onClick={() => setStatusFilter((p) => nextStatus(p, "AVAILABLE"))}
+      <div className="rsv-table-toolbar">
+        <div className="rsv-legend" aria-label="Filtra per stato">
+          <button
+            type="button"
+            className="rsv-legend-chip"
+            aria-pressed={statusFilter === "AVAILABLE"}
+            onClick={() => setStatusFilter((p) => nextStatus(p, "AVAILABLE"))}
+          >
+            <span className="rsv-legend-swatch rsv-legend-swatch--available" />
+            Disponibile ({availableCount})
+          </button>
+          <button
+            type="button"
+            className="rsv-legend-chip"
+            aria-pressed={statusFilter === "OCCUPIED"}
+            onClick={() => setStatusFilter((p) => nextStatus(p, "OCCUPIED"))}
+          >
+            <span className="rsv-legend-swatch rsv-legend-swatch--occupied" />
+            Occupato ({occupiedCount})
+          </button>
+        </div>
+        <IconButton
+          kind="ghost"
+          size="sm"
+          label="Aggiorna posti"
+          align="bottom-right"
+          onClick={() => setReloadTick((t) => t + 1)}
+          disabled={loading}
         >
-          <span className="rsv-legend-swatch rsv-legend-swatch--available" />
-          Disponibile ({availableCount})
-        </button>
-        <button
-          type="button"
-          className="rsv-legend-chip"
-          aria-pressed={statusFilter === "OCCUPIED"}
-          onClick={() => setStatusFilter((p) => nextStatus(p, "OCCUPIED"))}
-        >
-          <span className="rsv-legend-swatch rsv-legend-swatch--occupied" />
-          Occupato ({occupiedCount})
-        </button>
+          <Renew />
+        </IconButton>
       </div>
 
       {error && (
@@ -478,6 +490,7 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
           }
           setReloadTick((t) => t + 1);
         }}
+        onConflict={() => setReloadTick((t) => t + 1)}
       />
     </main>
   );

@@ -281,3 +281,30 @@ main {
 .rsv-filters-body {
   margin-top: 1rem;
 }
+
+// Toolbar sopra la tabella in SpotsBrowser: legenda interattiva a sinistra,
+// IconButton di refresh manuale a destra. Su schermi stretti va a capo.
+.rsv-table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+
+  // Quando la legenda è dentro la toolbar, eliminiamo il suo margin-bottom
+  // per non sommare lo spazio: ci pensa la toolbar.
+  .rsv-legend {
+    margin-bottom: 0;
+  }
+}
+
+// Header di pagina (titolo + sottotitolo) con IconButton refresh affiancato a
+// destra. Usato in MyReservationsList: un solo `reloadTick` ricarica entrambi
+// i tab PARKING e DESK.
+.rsv-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+}

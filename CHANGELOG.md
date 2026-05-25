@@ -2,6 +2,18 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-05-25 — Refresh manuale + auto-refresh dopo conflitto 409
+
+Aggiornamento dati tabella scelto come combinazione (b) + (c) — niente polling per ora (MVP).
+
+- **(b) Refresh manuale**: IconButton `Renew` (Carbon ghost, size sm, `disabled={loading}`) in:
+  - [`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx): nella toolbar accanto alla legenda interattiva (`.rsv-table-toolbar` flex space-between).
+  - [`MyReservationsList.tsx`](apps/web/src/components/MyReservationsList.tsx): dentro ogni tab (PARKING e DESK), in una toolbar `flex justify-end` sopra la `DataTable`, così la posizione rispecchia quella di `SpotsBrowser`. Entrambi i bottoni invocano lo stesso `setReloadTick` del padre, quindi cliccarne uno ricarica i dati di entrambi i tab.
+- **(c) Refresh on conflict 409**: [`BookingDialog.tsx`](apps/web/src/components/BookingDialog.tsx) espone una prop `onConflict?: () => void` chiamata nel catch quando `e instanceof ApiError && e.status === 409`. `SpotsBrowser` la collega a `setReloadTick((t)=>t+1)`: il dialog rimane aperto col messaggio italiano user-friendly mentre la tabella sotto si aggiorna silenziosamente, così alla chiusura l'utente vede già lo stato reale.
+- **Cancel non rilevante per (c)**: in `MyReservationsList` la cancellazione tocca solo le prenotazioni dell'utente loggato (no race), quindi 409 non si applica — basta (b).
+- [`globals.scss`](apps/web/src/styles/globals.scss): nuove classi `.rsv-table-toolbar` (con override nested `.rsv-legend { margin-bottom: 0 }` per evitare doppio spacing) e `.rsv-page-header`.
+- **Polling (a) escluso per MVP**: traffico inutile, andrebbe sospeso su `visibilityState === "hidden"`, e l'inflight FE + 409-on-conflict coprono già il 99% dei casi pratici.
+
 ## 2026-05-25 — Tasto "Reset filtri" su entrambe le pagine
 
 Bottone ghost size sm dentro `FiltersPanel`, visibile solo quando almeno un filtro è diverso dal default. Cancella Stato (`statusFilter`), filtri colonna (`colFilters`/`openFilter`) e:

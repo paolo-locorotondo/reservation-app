@@ -58,20 +58,6 @@ Verifica fatta sul codice attuale (`apps/api/src/reservations/reservations.servi
 - **Priority**: 🟡 MED (probabilità bassa in pratica, ma è la classe di bug peggiore — silente)
 - **Stato**: 🟡 VERIFICATO — fix non implementato (da fare quando si valuta priorità)
 
-## Aggiornamento dati tabella (real-time vs manuale)
-
-Oggi la tabella posti si aggiorna solo dopo `BookingDialog onSuccess` (incrementa `reloadTick`). Se un altro utente prenota mentre sto guardando, lo scopro solo cliccando "Prenota" e ricevendo il 409. UX migliorabile.
-
-Tre opzioni, da valutare insieme prima di implementare:
-
-- **a) Polling**: `setInterval` (es. ogni 30–60s) per richiamare `listSpots` con gli stessi filtri. Pro: zero attrito. Contro: traffico inutile quando la tab è in background; va sospeso con `document.visibilityState === "hidden"`.
-- **b) Tasto Refresh manuale**: icona `Renew` sopra la tabella che incrementa `reloadTick`. Pro: zero traffico inutile, controllo esplicito. Contro: l'utente deve ricordarselo.
-- **c) Refresh on interaction**: ogni click su una riga (e fallimento del booking) ricarica. Pro: l'utente non vede mai un 409 "a sorpresa". Contro: ritardo aggiuntivo prima di aprire il modal.
-- **Possibile combinazione**: (b) sempre, + (a) leggero (60s) solo quando tab in foreground, + (c) come fallback dopo un 409 (ricarica e mostra subito lo stato vero).
-- Soluzione "vera" sarebbe SSE/WebSocket, ma fuori scope MVP.
-- **Priority**: 🟡 MED
-- **Stato**: 🔴 TODO
-
 ## Vista Calendario per "Le mie prenotazioni" (e magari /spots)
 
 Sostituire (in opzione, non rimuovendo l'attuale) il DatePicker con una vista calendario mensile più ricca, ispirata al popup del DatePicker.
