@@ -150,13 +150,38 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
   // spots: ricarica al cambio dei filtri
   useEffect(() => {
     if (!date) return;
+    // Aspettiamo che siteId sia popolato da listSites() prima di chiedere i
+    // posti. Senza questa guard parte un primo fetch con siteId omesso (=
+    // posti di TUTTE le sedi), poi al cambio di siteId rifa il fetch con
+    // quella selezionata. Se la prima risposta arriva dopo la seconda (race),
+    // l'utente vede i posti sbagliati per qualche istante (es. "P-001" della
+    // sede Test invece di "P-01" di Bari).
+    if (!siteId) {
+      setSpots([]);
+      return;
+    }
     setLoading(true);
     setError(null);
+    // Cleanup guard: se i filtri cambiano mentre la fetch è in volo, la sua
+    // risposta verrà ignorata. Stesso pattern usato in SpotsCalendar.
+    let cancelled = false;
     api
-      .listSpots({ type, date, siteId: siteId || undefined, floorId: floorId || undefined })
-      .then(setSpots)
-      .catch((e: ApiError) => setError(`Caricamento posti: ${e.message}`))
-      .finally(() => setLoading(false));
+      .listSpots({ type, date, siteId, floorId: floorId || undefined })
+      .then((arr) => {
+        if (cancelled) return;
+        setSpots(arr);
+      })
+      .catch((e: ApiError) => {
+        if (cancelled) return;
+        setError(`Caricamento posti: ${e.message}`);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [type, date, siteId, floorId, reloadTick]);
 
   // myReservedDates: serve solo in vista calendario per il bordo "--mine".
