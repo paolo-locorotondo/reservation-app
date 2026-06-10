@@ -10,6 +10,12 @@ export interface BookingTarget {
   spotCode: string;
   date: string;
   type: SpotType;
+  // Contesto sede/piano/zona del posto, mostrato nel modal di conferma. Utile
+  // in scenari multi-sede dove più posti possono condividere lo stesso `code`.
+  // `zoneName` può essere null: alcuni piani potrebbero non avere zone.
+  siteName: string;
+  floorName: string;
+  zoneName: string | null;
 }
 
 interface Props {
@@ -68,11 +74,24 @@ export function BookingDialog({ target, onClose, onSuccess, onConflict }: Props)
     >
       {target && (
         <>
-          <p style={{ marginBottom: "1rem" }}>
+          <p>
             Stai per prenotare <strong>{label}</strong>{" "}
             <strong>{target.spotCode}</strong> per il giorno{" "}
             <strong>{target.date}</strong>.
           </p>
+          <ul style={{ margin: "0.75rem 0 1rem", paddingLeft: "1.25rem" }}>
+            <li>
+              Sede: <strong>{target.siteName}</strong>
+            </li>
+            <li>
+              Piano: <strong>{target.floorName}</strong>
+            </li>
+            {target.zoneName && (
+              <li>
+                Zona: <strong>{target.zoneName}</strong>
+              </li>
+            )}
+          </ul>
           {error && (
             <InlineNotification
               kind="error"

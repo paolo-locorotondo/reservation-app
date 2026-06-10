@@ -22,13 +22,15 @@ import {
   SkipToContent,
   Content,
 } from "@carbon/react";
-import { UserAvatar } from "@carbon/icons-react";
-import type { ReactNode } from "react";
+import { UserAvatar, Car, Devices, Calendar } from "@carbon/icons-react";
+import type { ComponentType, ReactNode } from "react";
 
-const NAV: { label: string; href: string }[] = [
-  { label: "Posti auto", href: "/parking" },
-  { label: "Scrivanie", href: "/desks" },
-  { label: "Le mie prenotazioni", href: "/my-reservations" },
+// Le icone vengono usate solo nella variante mobile dell'header (dove la nav
+// testuale collassa nel side menu). Su desktop si usano comunque le label.
+const NAV: { label: string; href: string; Icon: ComponentType }[] = [
+  { label: "Posti auto", href: "/parking", Icon: Car },
+  { label: "Scrivanie", href: "/desks", Icon: Devices },
+  { label: "Le mie prenotazioni", href: "/my-reservations", Icon: Calendar },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -104,6 +106,23 @@ export function AppShell({ children }: { children: ReactNode }) {
               ))}
             </HeaderNavigation>
             <HeaderGlobalBar>
+              {/* Nav-shortcut a icone visibili solo su mobile (sotto il
+                  breakpoint Carbon `lg` = 1056px, dove la HeaderNavigation
+                  testuale è già nascosta da Carbon). Su desktop la classe
+                  `rsv-header-mobile-nav` le nasconde via CSS, evitando
+                  duplicati con la nav testuale. */}
+              {NAV.map((item) => (
+                <HeaderGlobalAction
+                  key={item.href}
+                  aria-label={item.label}
+                  tooltipAlignment="center"
+                  isActive={pathname?.startsWith(item.href)}
+                  onClick={() => router.push(item.href)}
+                  className="rsv-header-mobile-nav"
+                >
+                  <item.Icon />
+                </HeaderGlobalAction>
+              ))}
               {displayName && (
                 <span className="rsv-header-username">{displayName}</span>
               )}

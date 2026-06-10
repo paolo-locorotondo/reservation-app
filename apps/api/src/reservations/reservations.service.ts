@@ -6,9 +6,8 @@ import {
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { MAX_DAYS_AHEAD } from "../common/business-rules";
 import type { CreateReservationDto, ReservationsRangeQuery } from "@reservation/shared";
-
-const MAX_DAYS_AHEAD = 30;
 
 @Injectable()
 export class ReservationsService {
@@ -29,8 +28,8 @@ export class ReservationsService {
       where: { id: dto.spotId },
       select: { id: true, type: true, active: true },
     });
-    if (!spot) throw new NotFoundException("spot not found");
-    if (!spot.active) throw new ConflictException("spot is not active");
+    if (!spot) throw new NotFoundException("posto non trovato");
+    if (!spot.active) throw new ConflictException("posto non attivo");
 
     const existing = await this.prisma.reservation.findFirst({
       where: {
@@ -67,7 +66,7 @@ export class ReservationsService {
       where: { id: reservationId },
       select: { id: true, userId: true, status: true },
     });
-    if (!r || r.userId !== userId) throw new NotFoundException("reservation not found");
+    if (!r || r.userId !== userId) throw new NotFoundException("prenotazione non trovata");
     if (r.status === "CANCELLED") return { id: r.id, status: r.status };
 
     return this.prisma.reservation.update({
@@ -106,12 +105,12 @@ function parseDateUtc(yyyyMmDd: string): Date {
   const [y, m, d] = yyyyMmDd.split("-").map(Number);
   const date = new Date(Date.UTC(y, m - 1, d));
   if (Number.isNaN(date.getTime())) {
-    throw new BadRequestException("invalid date");
+    throw new BadRequestException("data non valida");
   }
   const today = new Date();
   const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
   const diffDays = Math.floor((date.getTime() - todayUtc.getTime()) / 86_400_000);
-  if (diffDays < 0) throw new BadRequestException("date in the past");
-  if (diffDays > MAX_DAYS_AHEAD) throw new BadRequestException(`date beyond ${MAX_DAYS_AHEAD} days`);
+  if (diffDays < 0) throw new BadRequestException("data nel passato");
+  if (diffDays > MAX_DAYS_AHEAD) throw new BadRequestException(`data oltre i ${MAX_DAYS_AHEAD} giorni consentiti`);
   return date;
 }

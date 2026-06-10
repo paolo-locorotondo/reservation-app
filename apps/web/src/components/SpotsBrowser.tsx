@@ -19,19 +19,26 @@ import {
   IconButton,
   Search,
   Button,
+  ContentSwitcher,
+  Switch,
 } from "@carbon/react";
 import { Filter, FilterEdit, ArrowsVertical, ArrowUp, ArrowDown, Renew } from "@carbon/icons-react";
 import { Italian } from "flatpickr/dist/l10n/it.js";
 import type { CustomLocale } from "flatpickr/dist/types/locale";
 import type { Site, Floor, SpotType, SpotWithAvailability } from "@reservation/shared";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, type MyReservation } from "@/lib/api";
 import { BookingDialog, type BookingTarget } from "./BookingDialog";
 import { FiltersPanel } from "./FiltersPanel";
+import { SpotsCalendar } from "./SpotsCalendar";
 
 interface Props {
   type: SpotType;
   title: string;
-  subtitle: string;
+  // YYYY-MM-DD opzionale: usato come date filter iniziale invece di "oggi".
+  // Sorgenti: query string `?date=...` (deep link da /my-reservations calendar),
+  // futuri link esterni (Slack, email). Validato a fallback su "oggi" se non
+  // matcha il formato o è nel passato.
+  initialDate?: string;
 }
 
 const HEADERS = [
@@ -69,12 +76,20 @@ function isoFromDate(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
-export function SpotsBrowser({ type, title, subtitle }: Props) {
+// Accetta una stringa solo se è nel formato YYYY-MM-DD e >= oggi. Altrimenti
+// fallback su today. Evita di partire con una `date` invalida che farebbe poi
+// fallire la lista degli spots (date in the past).
+function sanitizeInitialDate(s: string | undefined): string {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return todayIso();
+  return s < todayIso() ? todayIso() : s;
+}
+
+export function SpotsBrowser({ type, title, initialDate }: Props) {
   const [sites, setSites] = useState<Site[]>([]);
   const [floors, setFloors] = useState<Floor[]>([]);
   const [siteId, setSiteId] = useState<string>("");
   const [floorId, setFloorId] = useState<string>("");
-  const [date, setDate] = useState<string>(todayIso());
+  const [date, setDate] = useState<string>(() => sanitizeInitialDate(initialDate));
   const [spots, setSpots] = useState<SpotWithAvailability[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +102,20 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
   const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(null);
+  // Toggle Calendario / Lista. State locale (no URL): coerente con gli altri
+  // filtri di pagina. Default Calendario: la panoramica mensile è il punto di
+  // partenza naturale ("vedo i giorni con disponibilità → scelgo quale").
+  // Eccezione: con un `?date=YYYY-MM-DD` nell'URL (deep link da
+  // /my-reservations calendar o futuri link esterni) partiamo in Lista, perché
+  // l'intent è "guarda i posti di QUEL giorno" e la lista è già filtrata
+  // sulla data dal `sanitizeInitialDate`.
+  const [view, setView] = useState<"list" | "calendar">(
+    initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate) ? "list" : "calendar",
+  );
+  // Date YYYY-MM-DD delle proprie ACTIVE per `type`: usate dal calendario per
+  // disegnare il bordo "--mine" sui giorni dove ho già prenotato. Si aggiorna
+  // ad ogni `reloadTick` (anche dopo create/cancel) e quando entro in calendar.
+  const [myReservedDates, setMyReservedDates] = useState<Set<string>>(new Set());
   // Locale Flatpickr derivato dal browser. Lo settiamo dopo il mount per evitare
   // mismatch SSR (`navigator` non esiste lato server).
   const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(undefined);
@@ -129,6 +158,37 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
       .catch((e: ApiError) => setError(`Caricamento posti: ${e.message}`))
       .finally(() => setLoading(false));
   }, [type, date, siteId, floorId, reloadTick]);
+
+  // myReservedDates: serve solo in vista calendario per il bordo "--mine".
+  // Fetch on demand (la prima volta che l'utente apre il calendario) + ad ogni
+  // reloadTick (così dopo prenotazione/cancellazione il bordo si aggiorna).
+  // Il set è filtrato anche per sede/piano: il bordo blu deve riflettere solo
+  // le proprie prenotazioni che matchano i filtri correnti del calendario,
+  // altrimenti cambiando sede vedresti bordi "fantasma" su giorni in cui hai
+  // prenotato altrove.
+  useEffect(() => {
+    if (view !== "calendar") return;
+    api
+      .listMyReservations()
+      .then((items: MyReservation[]) => {
+        const set = new Set<string>();
+        for (const r of items) {
+          if (r.spot.type !== type) continue;
+          if (r.status !== "ACTIVE") continue;
+          if (siteId && r.spot.floor.site.id !== siteId) continue;
+          if (floorId && r.spot.floor.id !== floorId) continue;
+          // r.date arriva come ISO datetime (es. "2026-06-09T00:00:00.000Z");
+          // estraiamo i primi 10 char per avere YYYY-MM-DD.
+          set.add(String(r.date).slice(0, 10));
+        }
+        setMyReservedDates(set);
+      })
+      .catch(() => {
+        // Errore non bloccante: il calendario funziona comunque, perdiamo solo
+        // l'overlay. Non sovrascriviamo `error` perché è già usato per gli spots.
+        setMyReservedDates(new Set());
+      });
+  }, [view, type, siteId, floorId, reloadTick]);
 
   const floorById = useMemo(
     () => Object.fromEntries(floors.map((f) => [f.id, f.name])),
@@ -194,10 +254,34 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
     setOpenFilter(null);
   }
 
+  // Subtitle calcolato in base a vista + tipo. La differenza tra liste e
+  // calendario: in lista clicchi una "riga", in calendar clicchi un "giorno";
+  // in calendar non c'è il filtro Data perché lo è il calendario stesso.
+  const itemLabel = type === "PARKING" ? "il posto" : "la scrivania";
+  const subtitle =
+    view === "calendar"
+      ? `Filtra per sede, piano e/o Zona, poi clicca un giorno del calendario verde per prenotare ${itemLabel}.`
+      : `Filtra per sede, piano, data e/o Zona, poi clicca una riga verde per prenotare ${itemLabel}.`;
+
   return (
     <main>
-      <h1 style={{ marginBottom: "0.25rem" }}>{title}</h1>
-      <p style={{ marginBottom: "2rem", color: "#525252" }}>{subtitle}</p>
+      <div className="rsv-page-header-row">
+        <div>
+          <h1 style={{ marginBottom: "0.25rem" }}>{title}</h1>
+          <p style={{ marginBottom: 0, color: "#525252" }}>{subtitle}</p>
+        </div>
+        {/* ContentSwitcher di Carbon vuole `selectedIndex` 0/1 e onChange con
+            { name }. Mappiamo manualmente "list"/"calendar" su 0/1. */}
+        <ContentSwitcher
+          size="sm"
+          selectedIndex={view === "calendar" ? 0 : 1}
+          onChange={({ name }) => setView(name === "calendar" ? "calendar" : "list")}
+          aria-label="Vista calendario o lista"
+        >
+          <Switch name="calendar" text="Calendario" />
+          <Switch name="list" text="Lista" />
+        </ContentSwitcher>
+      </div>
 
       <FiltersPanel
         summary={`Sede: ${sites.find((s) => s.id === siteId)?.name ?? "—"} · Piano: ${
@@ -231,22 +315,27 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
               <SelectItem key={f.id} value={f.id} text={f.name} />
             ))}
           </Select>
-          <DatePicker
-            datePickerType="single"
-            dateFormat="Y-m-d"
-            locale={datePickerLocale}
-            value={date}
-            minDate={todayIso()}
-            onChange={(dates: Date[]) => {
-              if (dates[0]) setDate(isoFromDate(dates[0]));
-            }}
-          >
-            <DatePickerInput
-              id="date-picker"
-              labelText="Data"
-              placeholder="YYYY-MM-DD"
-            />
-          </DatePicker>
+          {/* DatePicker nascosto in vista Calendario: il calendario stesso è il
+              picker. Si riattiva quando torni alla Lista (anche via click su un
+              giorno: in quel caso `date` è già stata aggiornata). */}
+          {view === "list" && (
+            <DatePicker
+              datePickerType="single"
+              dateFormat="Y-m-d"
+              locale={datePickerLocale}
+              value={date}
+              minDate={todayIso()}
+              onChange={(dates: Date[]) => {
+                if (dates[0]) setDate(isoFromDate(dates[0]));
+              }}
+            >
+              <DatePickerInput
+                id="date-picker"
+                labelText="Data"
+                placeholder="YYYY-MM-DD"
+              />
+            </DatePicker>
+          )}
         </div>
 
         {/* Filtro Zona esterno: utile soprattutto su mobile dove la colonna è
@@ -279,6 +368,40 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
         )}
       </FiltersPanel>
 
+      {error && (
+        <InlineNotification
+          kind="error"
+          title="Errore"
+          subtitle={error}
+          onCloseButtonClick={() => setError(null)}
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      {successMsg && (
+        <InlineNotification
+          kind="success"
+          title="Prenotazione confermata"
+          subtitle={successMsg}
+          onCloseButtonClick={() => setSuccessMsg(null)}
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      {view === "calendar" ? (
+        <SpotsCalendar
+          type={type}
+          siteId={siteId}
+          floorId={floorId}
+          zoneName={colFilters.zone}
+          myReservedDates={myReservedDates}
+          onDayClick={(iso) => {
+            setDate(iso);
+            setView("list");
+          }}
+        />
+      ) : (
+      <>
       <div className="rsv-table-toolbar">
         <div className="rsv-legend" aria-label="Filtra per stato">
           <button
@@ -311,26 +434,6 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
           <Renew />
         </IconButton>
       </div>
-
-      {error && (
-        <InlineNotification
-          kind="error"
-          title="Errore"
-          subtitle={error}
-          onCloseButtonClick={() => setError(null)}
-          style={{ marginBottom: "1rem" }}
-        />
-      )}
-
-      {successMsg && (
-        <InlineNotification
-          kind="success"
-          title="Prenotazione confermata"
-          subtitle={successMsg}
-          onCloseButtonClick={() => setSuccessMsg(null)}
-          style={{ marginBottom: "1rem" }}
-        />
-      )}
 
       {!loading && rows.length > 0 && filteredRows.length === 0 && (
         <InlineNotification
@@ -462,6 +565,14 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
                             spotCode: code,
                             date,
                             type,
+                            // Tutti gli spot mostrati appartengono al `siteId`
+                            // selezionato (il filtro sede è obbligatorio in
+                            // SpotsBrowser, default = sites[0].id), quindi il
+                            // lookup del nome è diretto. Piano e zona arrivano
+                            // dalla row corrente.
+                            siteName: sites.find((s) => s.id === siteId)?.name ?? "—",
+                            floorName: floorById[spot?.floorId ?? ""] ?? "—",
+                            zoneName: spot?.zoneName ?? null,
                           });
                         }}
                         title={available ? "Clicca per prenotare" : "Posto non disponibile"}
@@ -477,6 +588,8 @@ export function SpotsBrowser({ type, title, subtitle }: Props) {
             </TableContainer>
           )}
         </DataTable>
+      )}
+      </>
       )}
 
       <BookingDialog

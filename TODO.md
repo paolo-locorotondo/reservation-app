@@ -58,26 +58,13 @@ Verifica fatta sul codice attuale (`apps/api/src/reservations/reservations.servi
 - **Priority**: 🟡 MED (probabilità bassa in pratica, ma è la classe di bug peggiore — silente)
 - **Stato**: 🟡 VERIFICATO — fix non implementato (da fare quando si valuta priorità)
 
-## Vista Calendario per "Le mie prenotazioni" (e magari /spots)
+## Vista Calendario su /my-reservations (estensione futura)
 
-Sostituire (in opzione, non rimuovendo l'attuale) il DatePicker con una vista calendario mensile più ricca, ispirata al popup del DatePicker.
+La vista calendario è stata implementata su `/parking` e `/desks` (vedi `CHANGELOG.md`): è lì che porta valore concreto, perché l'utente vuole vedere quando sono disponibili i posti del mese.
 
-Approccio incrementale richiesto dall'utente:
+Su `/my-reservations` resta da valutare se aggiungere lo stesso toggle. Pro: panoramica visiva delle proprie prenotazioni. Contro: l'utente medio ha poche prenotazioni proprie, una griglia mensile di ~30 celle aggiunge poco rispetto alla lista.
 
-1. **Congelare** l'attuale `MyReservationsList` (vista "lista").
-2. **Creare** una nuova vista `MyReservationsCalendar` (componente fratello).
-3. Aggiungere un toggle "Vista Calendario" / "Vista Lista" in alto alla pagina (Carbon `ContentSwitcher` o `Toggle`).
-4. La vista calendario mostra il mese corrente:
-   - ogni giorno ha un **pallino verde** se ci sono ancora posti disponibili (in base ai filtri Sede/Piano/Tipo selezionati per quel giorno);
-   - **pallino rosso** se i posti sono tutti occupati;
-   - opzionalmente il **numero** di posti residui dentro il pallino (es. `3` per "ne restano 3");
-   - i giorni in cui l'utente ha già una propria prenotazione attiva sono evidenziati (bordo o icona).
-5. Cliccando un giorno → si torna alla vista lista (oppure naviga a `/parking?date=YYYY-MM-DD`) col filtro Data preimpostato.
+Se si decide di farlo, il pattern è già pronto: riutilizzare `SpotsCalendar` con `myReservedDates` come signal primario (non più overlay) e disabilitare il fetch availability.
 
-Aspetti tecnici:
-
-- **Costo dati**: per disegnare i pallini servono i conteggi disponibilità per ciascuno dei ~30 giorni del mese visibile. Oggi `/spots?date=...` accetta una sola data → serve un nuovo endpoint `GET /spots/availability?from&to&siteId&floorId&type` che ritorna `[{ date, available, total }]`. Da progettare con cura per non far esplodere il payload.
-- **Componente calendario**: valutare riuso del flatpickr embedded (Carbon `DatePicker` può essere "inline"), oppure scrivere una griglia 7×N custom — più libertà sul rendering dei pallini ma più codice.
-- **Generalizzazione**: se funziona bene per `/my-reservations`, valutare un toggle simile su `/parking` e `/desks`.
-- **Priority**: 🟢 LOW (feature di esplorazione, dipende dall'endpoint nuovo)
-- **Stato**: 🔴 TODO
+- **Priority**: 🟢 LOW
+- **Stato**: 🔴 TODO (rivalutare dopo qualche settimana di uso reale)

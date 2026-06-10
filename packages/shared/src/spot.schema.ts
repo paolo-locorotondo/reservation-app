@@ -24,3 +24,25 @@ export const SpotsQuerySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
 });
 export type SpotsQuery = z.infer<typeof SpotsQuerySchema>;
+
+// Disponibilità mensile: il calendario su /parking e /desks chiede un range di
+// giorni e riceve un conteggio per giorno. Range max 30 giorni (allineato a
+// MAX_DAYS_AHEAD applicato nel service).
+// `zoneName` è una text search case-insensitive (ILIKE %X%) per coerenza col
+// filtro Zona della vista Lista, che è anch'esso testuale.
+export const SpotsAvailabilityQuerySchema = z.object({
+  siteId: z.string().optional(),
+  floorId: z.string().optional(),
+  zoneName: z.string().optional(),
+  type: SpotTypeSchema,
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "from must be YYYY-MM-DD"),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "to must be YYYY-MM-DD"),
+});
+export type SpotsAvailabilityQuery = z.infer<typeof SpotsAvailabilityQuerySchema>;
+
+export const SpotsAvailabilityDaySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  available: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+export type SpotsAvailabilityDay = z.infer<typeof SpotsAvailabilityDaySchema>;

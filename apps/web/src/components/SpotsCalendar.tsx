@@ -1,0 +1,297 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { IconButton, InlineLoading, InlineNotification } from "@carbon/react";
+import { ChevronLeft, ChevronRight } from "@carbon/icons-react";
+import type { SpotType } from "@reservation/shared";
+import { api, ApiError } from "@/lib/api";
+
+// Letto a build-time dalla env var del frontend (Next richiede prefisso
+// NEXT_PUBLIC_ per le var esposte al client). Da tenere in pari con
+// MAX_DAYS_AHEAD lato API (.env: stessa coppia di valori). Fallback 30.
+const MAX_DAYS_AHEAD = process.env.NEXT_PUBLIC_MAX_DAYS_AHEAD
+  ? Number(process.env.NEXT_PUBLIC_MAX_DAYS_AHEAD)
+  : 30;
+
+// Lunedì primo (it-IT). Coerente con flatpickr italiano usato negli altri
+// DatePicker dell'app.
+const WEEKDAYS_IT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
+
+const MONTH_LABEL = new Intl.DateTimeFormat("it-IT", {
+  month: "long",
+  year: "numeric",
+});
+
+interface Props {
+  type: SpotType;
+  siteId: string;
+  // "" = tutti i piani
+  floorId: string;
+  // Text search libera sul nome zona (ILIKE backend). "" = nessun filtro zona.
+  // Coerente col filtro Zona della vista Lista, così i pallini riflettono
+  // esattamente lo stesso conteggio.
+  zoneName?: string;
+  // YYYY-MM-DD delle proprie prenotazioni ACTIVE per `type`. Usato come
+  // overlay (bordo) sulle celle.
+  myReservedDates: Set<string>;
+  onDayClick: (iso: string) => void;
+  // Default true: la pagina /parking|/desks vuole vedere i pallini availability.
+  // false in /my-reservations: lì la calendar serve come panoramica delle
+  // proprie prenotazioni + scorciatoia "vai a prenotare", senza fetch
+  // disponibilità (sarebbe rumore informativo).
+  showAvailability?: boolean;
+}
+
+function isoFromUtc(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function todayUtc(): Date {
+  const d = new Date();
+  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+}
+
+function startOfMonthUtc(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+}
+
+function endOfMonthUtc(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+}
+
+function addDaysUtc(d: Date, n: number): Date {
+  return new Date(d.getTime() + n * 86_400_000);
+}
+
+// Lun=0..Dom=6 (getUTCDay è Dom=0, Lun=1...).
+function weekdayIndexLunDom(d: Date): number {
+  const u = d.getUTCDay();
+  return u === 0 ? 6 : u - 1;
+}
+
+export function SpotsCalendar({
+  type,
+  siteId,
+  floorId,
+  zoneName,
+  myReservedDates,
+  onDayClick,
+  showAvailability = true,
+}: Props) {
+  const [currentMonth, setCurrentMonth] = useState(() => startOfMonthUtc(todayUtc()));
+  const [data, setData] = useState<Map<string, { available: number; total: number }>>(
+    new Map(),
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const today = useMemo(todayUtc, []);
+  const maxDate = useMemo(() => addDaysUtc(today, MAX_DAYS_AHEAD), [today]);
+
+  // Range richiesto al backend: il mese visibile troncato a [oggi, oggi+30gg].
+  // Le celle del mese fuori range vengono mostrate come disabled lato client.
+  const monthStart = currentMonth;
+  const monthEnd = useMemo(() => endOfMonthUtc(currentMonth), [currentMonth]);
+  const fetchFrom = monthStart.getTime() < today.getTime() ? today : monthStart;
+  const fetchTo = monthEnd.getTime() > maxDate.getTime() ? maxDate : monthEnd;
+
+  useEffect(() => {
+    // showAvailability=false: skip fetch (no pallini). Le celle sono comunque
+    // cliccabili nelle date in range, come "vai a prenotare quel giorno".
+    if (!showAvailability) {
+      setData(new Map());
+      return;
+    }
+    // Mese interamente fuori dal range valido: nessun fetch, calendar disabled.
+    if (fetchFrom.getTime() > fetchTo.getTime()) {
+      setData(new Map());
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    api
+      .listAvailability({
+        type,
+        from: isoFromUtc(fetchFrom),
+        to: isoFromUtc(fetchTo),
+        siteId: siteId || undefined,
+        floorId: floorId || undefined,
+        zoneName: zoneName || undefined,
+      })
+      .then((arr) => {
+        const m = new Map<string, { available: number; total: number }>();
+        for (const d of arr) m.set(d.date, { available: d.available, total: d.total });
+        setData(m);
+      })
+      .catch((e: ApiError) => setError(`Caricamento disponibilità: ${e.message}`))
+      .finally(() => setLoading(false));
+    // currentMonth.getTime() invece dell'oggetto Date per stabilizzare la dep
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAvailability, type, siteId, floorId, zoneName, currentMonth.getTime()]);
+
+  // Costruisce le celle: pad iniziale (gg della settimana precedenti al 1°) +
+  // giorni del mese + pad finale per arrotondare a 7.
+  const cells = useMemo(() => {
+    const pad = weekdayIndexLunDom(monthStart);
+    const daysInMonth = monthEnd.getUTCDate();
+    const totalCells = Math.ceil((pad + daysInMonth) / 7) * 7;
+    const out: { iso: string | null; day: number | null; date: Date | null }[] = [];
+    for (let i = 0; i < totalCells; i++) {
+      const dayOfMonth = i - pad + 1;
+      if (dayOfMonth < 1 || dayOfMonth > daysInMonth) {
+        out.push({ iso: null, day: null, date: null });
+      } else {
+        const d = new Date(
+          Date.UTC(currentMonth.getUTCFullYear(), currentMonth.getUTCMonth(), dayOfMonth),
+        );
+        out.push({ iso: isoFromUtc(d), day: dayOfMonth, date: d });
+      }
+    }
+    return out;
+  }, [currentMonth, monthStart, monthEnd]);
+
+  const monthLabel = MONTH_LABEL.format(currentMonth);
+  // Intl restituisce "giugno 2026" minuscolo; capitalizzaiamo l'iniziale.
+  const monthLabelCap = monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1);
+
+  function gotoPrev() {
+    setCurrentMonth(
+      (m) => new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() - 1, 1)),
+    );
+  }
+  function gotoNext() {
+    setCurrentMonth(
+      (m) => new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1)),
+    );
+  }
+
+  // prev disabled quando l'intero mese precedente è prima di oggi.
+  const prevMonthEnd = endOfMonthUtc(
+    new Date(Date.UTC(currentMonth.getUTCFullYear(), currentMonth.getUTCMonth() - 1, 1)),
+  );
+  const prevDisabled = prevMonthEnd.getTime() < today.getTime();
+  // next disabled quando il primo giorno del mese successivo è oltre oggi+30gg.
+  const nextMonthStart = new Date(
+    Date.UTC(currentMonth.getUTCFullYear(), currentMonth.getUTCMonth() + 1, 1),
+  );
+  const nextDisabled = nextMonthStart.getTime() > maxDate.getTime();
+
+  return (
+    <div className="rsv-calendar">
+      <div className="rsv-calendar-header">
+        <IconButton
+          kind="ghost"
+          size="sm"
+          label="Mese precedente"
+          align="bottom-left"
+          disabled={prevDisabled}
+          onClick={gotoPrev}
+        >
+          <ChevronLeft />
+        </IconButton>
+        <span className="rsv-calendar-month-label">{monthLabelCap}</span>
+        <IconButton
+          kind="ghost"
+          size="sm"
+          label="Mese successivo"
+          align="bottom-right"
+          disabled={nextDisabled}
+          onClick={gotoNext}
+        >
+          <ChevronRight />
+        </IconButton>
+      </div>
+
+      {error && (
+        <InlineNotification
+          kind="error"
+          title="Errore"
+          subtitle={error}
+          onCloseButtonClick={() => setError(null)}
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      {loading ? (
+        <InlineLoading description="Carico la disponibilità…" />
+      ) : (
+        <>
+          <div className="rsv-calendar-weekdays">
+            {WEEKDAYS_IT.map((d) => (
+              <div key={d} className="rsv-calendar-weekday">
+                {d}
+              </div>
+            ))}
+          </div>
+          <div className="rsv-calendar-grid">
+            {cells.map((c, i) => {
+              if (c.iso === null) {
+                return (
+                  <div
+                    key={`pad-${i}`}
+                    className="rsv-calendar-day rsv-calendar-day--pad"
+                  />
+                );
+              }
+              const inRange =
+                c.date!.getTime() >= today.getTime() &&
+                c.date!.getTime() <= maxDate.getTime();
+              const info = data.get(c.iso);
+              const isFull = info !== undefined && info.available === 0;
+              const isAvailable = info !== undefined && info.available > 0;
+              const isMine = myReservedDates.has(c.iso);
+              // Quando showAvailability=false, la cella è cliccabile per tutto
+              // il range valido (non dipende da `info`, che è sempre vuoto).
+              const disabled = !inRange || (showAvailability && !info);
+
+              const classes = [
+                "rsv-calendar-day",
+                disabled && "rsv-calendar-day--disabled",
+                isAvailable && "rsv-calendar-day--available",
+                isFull && "rsv-calendar-day--full",
+                isMine && "rsv-calendar-day--mine",
+              ]
+                .filter(Boolean)
+                .join(" ");
+
+              return (
+                <button
+                  key={c.iso}
+                  type="button"
+                  className={classes}
+                  disabled={disabled}
+                  onClick={() => !disabled && onDayClick(c.iso!)}
+                  aria-label={
+                    isAvailable
+                      ? `${c.day} ${monthLabelCap}, ${info!.available} posti disponibili${isMine ? ", hai una prenotazione" : ""}`
+                      : isFull
+                        ? `${c.day} ${monthLabelCap}, tutti i posti occupati${isMine ? ", hai una prenotazione" : ""}`
+                        : `${c.day} ${monthLabelCap}`
+                  }
+                  title={
+                    isAvailable
+                      ? `${info!.available} disponibili su ${info!.total}`
+                      : isFull
+                        ? `Tutti i ${info!.total} posti occupati`
+                        : undefined
+                  }
+                >
+                  <span className="rsv-calendar-day-number">{c.day}</span>
+                  {isAvailable && (
+                    <span className="rsv-calendar-pill rsv-calendar-pill--available">
+                      {info!.available}
+                    </span>
+                  )}
+                  {isFull && <span className="rsv-calendar-pill rsv-calendar-pill--full" />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

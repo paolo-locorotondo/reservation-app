@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   DataTable,
   Table,
@@ -25,6 +26,8 @@ import {
   Tab,
   TabPanels,
   TabPanel,
+  ContentSwitcher,
+  Switch,
 } from "@carbon/react";
 import {
   Filter,
@@ -39,6 +42,7 @@ import type { CustomLocale } from "flatpickr/dist/types/locale";
 import type { SpotType } from "@reservation/shared";
 import { api, ApiError, type MyReservation } from "@/lib/api";
 import { FiltersPanel } from "./FiltersPanel";
+import { SpotsCalendar } from "./SpotsCalendar";
 
 const HEADERS = [
   { key: "date", header: "Data" },
@@ -73,6 +77,7 @@ function formatDate(iso: string | Date): string {
 }
 
 export function MyReservationsList() {
+  const router = useRouter();
   const [items, setItems] = useState<MyReservation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +88,20 @@ export function MyReservationsList() {
   // Tabs sempre montato durante i reload (vedi `isInitialLoad` sotto).
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  // Toggle Vista a livello pagina (condiviso tra i due tab). Default
+  // Calendario, coerente con /parking e /desks: la panoramica mensile è il
+  // punto di partenza naturale. In Calendario mostriamo SpotsCalendar con
+  // `showAvailability=false`: solo bordo blu sui giorni con propria
+  // prenotazione, click → naviga a /parking|/desks preimpostando la data come
+  // query string.
+  const [view, setView] = useState<"list" | "calendar">("calendar");
+  // Modal di cancellazione attivata dal click su un giorno-mio nel calendario
+  // della vista /my-reservations (la vista lista ha il suo modal in
+  // ReservationsTab; lì il click è sulla riga della tabella).
+  const [calendarCancelTarget, setCalendarCancelTarget] = useState<MyReservation | null>(
+    null,
+  );
+  const [calendarCancelling, setCalendarCancelling] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -106,17 +125,100 @@ export function MyReservationsList() {
     [items],
   );
 
+  // Date YYYY-MM-DD delle proprie prenotazioni: usate dal calendario per
+  // disegnare il bordo blu sui giorni "miei". `r.date` è un ISO datetime
+  // (es. 2026-06-09T00:00:00.000Z), prendiamo i primi 10 char.
+  const parkingDates = useMemo(
+    () => new Set(parkingItems.map((r) => String(r.date).slice(0, 10))),
+    [parkingItems],
+  );
+  const deskDates = useMemo(
+    () => new Set(deskItems.map((r) => String(r.date).slice(0, 10))),
+    [deskItems],
+  );
+
   function handleCancelled(msg: string) {
     setSuccessMsg(msg);
     setReloadTick((t) => t + 1);
   }
 
+  // Click su giorno del calendario: se l'utente ha una prenotazione attiva del
+  // tab corrente in quel giorno → apre il modal di cancellazione; altrimenti
+  // naviga a /parking|/desks con la data preimpostata. Replica il pattern
+  // "click row → cancella" della vista Lista applicato al calendario.
+  function handleCalendarDayClick(type: SpotType, iso: string) {
+    const pool = type === "PARKING" ? parkingItems : deskItems;
+    const own = pool.find((r) => String(r.date).slice(0, 10) === iso);
+    if (own) {
+      setCalendarCancelTarget(own);
+    } else {
+      const path = type === "PARKING" ? "/parking" : "/desks";
+      router.push(`${path}?date=${iso}`);
+    }
+  }
+
+  async function confirmCalendarCancel() {
+    if (!calendarCancelTarget) return;
+    setCalendarCancelling(true);
+    try {
+      await api.cancelReservation(calendarCancelTarget.id);
+      handleCancelled(
+        `Prenotazione del ${formatDate(calendarCancelTarget.date)} (${calendarCancelTarget.spot.code}) cancellata.`,
+      );
+      setCalendarCancelTarget(null);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "Errore imprevisto";
+      setError(`Cancellazione fallita: ${msg}`);
+    } finally {
+      setCalendarCancelling(false);
+    }
+  }
+
+  // Subtitle dinamico: la calendar view ha logica diversa dal list view (click
+  // su giorno con propria prenotazione apre il modal di cancellazione, click su
+  // un altro giorno naviga a /parking|/desks).
+  const subtitle =
+    view === "calendar"
+      ? "Prenotazioni attive — clicca un giorno del calendario per prenotare o cancellare la tua prenotazione (i giorni con una prenotazione hanno il bordo blu)."
+      : "Prenotazioni attive — clicca una riga per cancellare la prenotazione.";
+
   return (
     <main>
-      <h1 style={{ marginBottom: "0.25rem" }}>Le mie prenotazioni</h1>
-      <p style={{ marginBottom: "2rem", color: "#525252" }}>
-        Prenotazioni attive — clicca una riga per cancellare la prenotazione.
-      </p>
+      <div className="rsv-page-header-row">
+        <div>
+          <h1 style={{ marginBottom: "0.25rem" }}>Le mie prenotazioni</h1>
+          <p style={{ marginBottom: 0, color: "#525252" }}>{subtitle}</p>
+          {/* Scorciatoia "Prenota qui ..." visibile solo in vista Lista quando
+              ci sono già prenotazioni (le Tabs sono montate, quindi
+              `selectedIndex` riflette davvero il tab visibile). Quando l'utente
+              non ha ancora prenotazioni mostriamo entrambi i link sotto, vicino
+              alla frase "Non hai prenotazioni attive.". In Calendario il click
+              sui giorni copre già il flusso prenotazione. */}
+          {view === "list" && items.length > 0 && (
+            <Button
+              kind="ghost"
+              size="sm"
+              style={{ paddingLeft: 0, marginTop: "0.5rem" }}
+              onClick={() =>
+                router.push(selectedIndex === 0 ? "/parking" : "/desks")
+              }
+            >
+              {selectedIndex === 0
+                ? "Prenota qui i posti auto"
+                : "Prenota qui la tua scrivania"}
+            </Button>
+          )}
+        </div>
+        <ContentSwitcher
+          size="sm"
+          selectedIndex={view === "calendar" ? 0 : 1}
+          onChange={({ name }) => setView(name === "calendar" ? "calendar" : "list")}
+          aria-label="Vista calendario o lista"
+        >
+          <Switch name="calendar" text="Calendario" />
+          <Switch name="list" text="Lista" />
+        </ContentSwitcher>
+      </div>
 
       {error && (
         <InlineNotification
@@ -141,7 +243,32 @@ export function MyReservationsList() {
       {loading && !hasLoadedOnce ? (
         <InlineLoading description="Carico le prenotazioni…" />
       ) : items.length === 0 ? (
-        <p style={{ color: "#525252" }}>Non hai prenotazioni attive.</p>
+        // Senza prenotazioni le Tabs non si montano: l'utente non può scegliere
+        // tra "Posti auto" / "Scrivanie" via UI, quindi mostriamo entrambi i
+        // link inline per offrirgli direttamente la scelta del flusso.
+        <div>
+          <p style={{ color: "#525252", marginBottom: "0.75rem" }}>
+            Non hai prenotazioni attive.
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <Button
+              kind="ghost"
+              size="sm"
+              style={{ paddingLeft: 0 }}
+              onClick={() => router.push("/parking")}
+            >
+              Prenota qui i posti auto
+            </Button>
+            <Button
+              kind="ghost"
+              size="sm"
+              style={{ paddingLeft: 0 }}
+              onClick={() => router.push("/desks")}
+            >
+              Prenota qui la tua scrivania
+            </Button>
+          </div>
+        </div>
       ) : (
         <Tabs
           selectedIndex={selectedIndex}
@@ -153,30 +280,100 @@ export function MyReservationsList() {
           </TabList>
           <TabPanels>
             <TabPanel>
-              <ReservationsTab
-                tabKey="PARKING"
-                type="PARKING"
-                items={parkingItems}
-                onCancelled={handleCancelled}
-                onError={(m) => setError(m)}
-                onReload={() => setReloadTick((t) => t + 1)}
-                loading={loading}
-              />
+              {view === "list" ? (
+                <ReservationsTab
+                  tabKey="PARKING"
+                  type="PARKING"
+                  items={parkingItems}
+                  onCancelled={handleCancelled}
+                  onError={(m) => setError(m)}
+                  onReload={() => setReloadTick((t) => t + 1)}
+                  loading={loading}
+                />
+              ) : (
+                // showAvailability=false: niente pallini di disponibilità (in
+                // /my-reservations sarebbero rumore). Bordo blu sui giorni
+                // della propria lista; click su un giorno-mio apre il modal di
+                // cancel, click su un giorno qualunque naviga a /parking per
+                // prenotare un nuovo posto.
+                <SpotsCalendar
+                  type="PARKING"
+                  siteId=""
+                  floorId=""
+                  myReservedDates={parkingDates}
+                  onDayClick={(iso) => handleCalendarDayClick("PARKING", iso)}
+                  showAvailability={false}
+                />
+              )}
             </TabPanel>
             <TabPanel>
-              <ReservationsTab
-                tabKey="DESK"
-                type="DESK"
-                items={deskItems}
-                onCancelled={handleCancelled}
-                onError={(m) => setError(m)}
-                onReload={() => setReloadTick((t) => t + 1)}
-                loading={loading}
-              />
+              {view === "list" ? (
+                <ReservationsTab
+                  tabKey="DESK"
+                  type="DESK"
+                  items={deskItems}
+                  onCancelled={handleCancelled}
+                  onError={(m) => setError(m)}
+                  onReload={() => setReloadTick((t) => t + 1)}
+                  loading={loading}
+                />
+              ) : (
+                <SpotsCalendar
+                  type="DESK"
+                  siteId=""
+                  floorId=""
+                  myReservedDates={deskDates}
+                  onDayClick={(iso) => handleCalendarDayClick("DESK", iso)}
+                  showAvailability={false}
+                />
+              )}
             </TabPanel>
           </TabPanels>
         </Tabs>
       )}
+
+      {/* Modal di cancellazione attivata dal calendario. Il modal della vista
+          Lista vive dentro ReservationsTab (un modal per tab). Qui basta uno
+          condiviso perché il calendario è una sola istanza per pagina. */}
+      <Modal
+        open={calendarCancelTarget !== null}
+        danger
+        modalHeading="Cancellare la prenotazione?"
+        primaryButtonText={calendarCancelling ? "Cancellazione…" : "Cancella"}
+        secondaryButtonText="Annulla"
+        primaryButtonDisabled={calendarCancelling}
+        onRequestClose={() => {
+          if (!calendarCancelling) setCalendarCancelTarget(null);
+        }}
+        onRequestSubmit={confirmCalendarCancel}
+      >
+        {calendarCancelTarget && (
+          <>
+            <p>
+              Stai per cancellare la prenotazione{" "}
+              {calendarCancelTarget.spot.type === "PARKING"
+                ? "del posto auto"
+                : "della scrivania"}{" "}
+              <strong>{calendarCancelTarget.spot.code}</strong> per il{" "}
+              <strong>{formatDate(calendarCancelTarget.date)}</strong>.
+            </p>
+            <ul style={{ margin: "0.75rem 0", paddingLeft: "1.25rem" }}>
+              <li>
+                Sede: <strong>{calendarCancelTarget.spot.floor.site.name}</strong>
+              </li>
+              <li>
+                Piano: <strong>{calendarCancelTarget.spot.floor.name}</strong>
+              </li>
+              {calendarCancelTarget.spot.zone && (
+                <li>
+                  Zona: <strong>{calendarCancelTarget.spot.zone.name}</strong>
+                </li>
+              )}
+            </ul>
+            <p>L&apos;operazione è immediata.</p>
+          </>
+        )}
+      </Modal>
     </main>
   );
 }
@@ -558,12 +755,27 @@ function ReservationsTab({
         onRequestSubmit={confirmCancel}
       >
         {cancelTarget && (
-          <p>
-            Stai per cancellare la prenotazione del {typeLabel}{" "}
-            <strong>{cancelTarget.spot.code}</strong> per il{" "}
-            <strong>{formatDate(cancelTarget.date)}</strong>. L&apos;operazione è
-            immediata.
-          </p>
+          <>
+            <p>
+              Stai per cancellare la prenotazione del {typeLabel}{" "}
+              <strong>{cancelTarget.spot.code}</strong> per il{" "}
+              <strong>{formatDate(cancelTarget.date)}</strong>.
+            </p>
+            <ul style={{ margin: "0.75rem 0", paddingLeft: "1.25rem" }}>
+              <li>
+                Sede: <strong>{cancelTarget.spot.floor.site.name}</strong>
+              </li>
+              <li>
+                Piano: <strong>{cancelTarget.spot.floor.name}</strong>
+              </li>
+              {cancelTarget.spot.zone && (
+                <li>
+                  Zona: <strong>{cancelTarget.spot.zone.name}</strong>
+                </li>
+              )}
+            </ul>
+            <p>L&apos;operazione è immediata.</p>
+          </>
         )}
       </Modal>
     </>

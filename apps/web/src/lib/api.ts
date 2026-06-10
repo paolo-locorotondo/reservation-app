@@ -3,6 +3,7 @@ import type {
   Floor,
   SpotType,
   SpotWithAvailability,
+  SpotsAvailabilityDay,
   CreateReservationDto,
   Reservation,
 } from "@reservation/shared";
@@ -32,16 +33,40 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, text || res.statusText);
+    // Estraiamo il `message` dal body Nest standard
+    // ({"message":"...","error":"...","statusCode":...}) così gli errori
+    // mostrati all'utente non sono JSON grezzo. Il body completo resta
+    // accessibile via `ApiError.rawBody` per debug / log.
+    throw new ApiError(res.status, friendlyMessage(text) || res.statusText, text);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public rawBody?: string,
+  ) {
     super(message);
   }
+}
+
+// Estrae il `message` dal body di errore Nest (formato standard
+// `{message, error, statusCode}` oppure `{message: string[]}` per ValidationPipe).
+// Se il body non è JSON, ritorna la stringa così com'è (potrebbe essere già
+// human-readable, es. messaggi di errore fetch). Stringa vuota → "".
+function friendlyMessage(raw: string): string {
+  if (!raw) return "";
+  try {
+    const j = JSON.parse(raw) as { message?: string | string[] };
+    if (Array.isArray(j.message)) return j.message.join("; ");
+    if (typeof j.message === "string") return j.message;
+  } catch {
+    // non-JSON, fall through
+  }
+  return raw;
 }
 
 export const api = {
@@ -52,6 +77,24 @@ export const api = {
     if (params.siteId) qs.set("siteId", params.siteId);
     if (params.floorId) qs.set("floorId", params.floorId);
     return call<SpotWithAvailability[]>(`/spots?${qs.toString()}`);
+  },
+  listAvailability: (params: {
+    type: SpotType;
+    from: string;
+    to: string;
+    siteId?: string;
+    floorId?: string;
+    zoneName?: string;
+  }) => {
+    const qs = new URLSearchParams({
+      type: params.type,
+      from: params.from,
+      to: params.to,
+    });
+    if (params.siteId) qs.set("siteId", params.siteId);
+    if (params.floorId) qs.set("floorId", params.floorId);
+    if (params.zoneName) qs.set("zoneName", params.zoneName);
+    return call<SpotsAvailabilityDay[]>(`/spots/availability?${qs.toString()}`);
   },
   createReservation: (dto: CreateReservationDto) =>
     call<Reservation>("/reservations", {

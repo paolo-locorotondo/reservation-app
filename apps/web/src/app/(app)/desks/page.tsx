@@ -1,11 +1,15 @@
 import { SpotsBrowser } from "@/components/SpotsBrowser";
 
-export default function DesksPage() {
+interface PageProps {
+  searchParams: { date?: string };
+}
+
+export default function DesksPage({ searchParams }: PageProps) {
   return (
     <SpotsBrowser
       type="DESK"
       title="Scrivanie"
-      subtitle="Filtra per sede, piano e data, poi clicca una riga verde per prenotare la scrivania."
+      initialDate={searchParams.date}
     />
   );
 }

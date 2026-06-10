@@ -2,6 +2,54 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-09 — Rifiniture calendario: filtro zona, copy dinamica, scorciatoie
+
+Cinque interventi piccoli a valle dei feedback d'uso.
+
+- **Filtro zona nel calendario** ([`spots.service.ts`](apps/api/src/spots/spots.service.ts), [`SpotsAvailabilityQuerySchema`](packages/shared/src/spot.schema.ts), [`api.ts`](apps/web/src/lib/api.ts), [`SpotsCalendar.tsx`](apps/web/src/components/SpotsCalendar.tsx)): prima i pallini mostravano sempre il totale "tipo+sede+piano" ignorando la text search Zona della Lista (es. `Bari Piano 3` mostrava 62 anche con filtro `Stanza 314` che riduce a 8). Aggiunto `zoneName?: string` allo schema availability — text search ILIKE su `Zone.name` (replica il behavior client-side della Lista). [`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx) lo passa al calendar via `colFilters.zone`.
+- **Copy dinamica list/calendar**: il subtitle delle pagine `/parking`, `/desks` e `/my-reservations` si adatta alla vista. In Calendar: "clicca un giorno verde" / "clicca un giorno per prenotare o cancellare" + menzione del bordo blu per i giorni con propria prenotazione. La prop `subtitle` di [`SpotsBrowser`](apps/web/src/components/SpotsBrowser.tsx) è stata rimossa: ora il componente la calcola internamente da `type` + `view` (single source of truth, `/parking/page.tsx` e `/desks/page.tsx` non la passano più).
+- **Scorciatoia "Prenota qui..." in /my-reservations vista Lista** ([`MyReservationsList.tsx`](apps/web/src/components/MyReservationsList.tsx)): nuovo `Button kind="ghost"` sotto il subtitle della pagina (livello principale, non per-tab). Label dinamico in base al tab attivo (`selectedIndex`): "Prenota qui i posti auto" (`/parking`) o "Prenota qui la tua scrivania" (`/desks`). Visibile solo in vista Lista quando ci sono prenotazioni — quando l'utente non ne ha ancora le Tabs non si montano (selectedIndex non significativo), quindi mostriamo entrambi i link inline accanto alla frase "Non hai prenotazioni attive." per offrirgli la scelta. In Calendario il click sui giorni copre già il flusso prenotazione.
+- **Click su giorno-mio nel calendario di /my-reservations → modal cancel**: prima il click navigava sempre alla pagina di booking, anche sui giorni con propria prenotazione. Ora `handleCalendarDayClick(type, iso)`: se trova una reservation propria del tipo in quel giorno (`parkingItems`/`deskItems`) apre il modal di cancellazione (`calendarCancelTarget` + Carbon `Modal danger` riusando `api.cancelReservation` + `handleCancelled`). Altrimenti `router.push`. Modal vive in `MyReservationsList` (uno solo, per la calendar). La vista Lista ha già il suo modal in `ReservationsTab`.
+- **Modal cancellazione più informativo**: entrambi i modali (vista Lista e vista Calendario) ora elencano Sede, Piano e Zona della prenotazione che si sta per cancellare, oltre a codice posto e data. Utile in contesto multi-sede, dove più posti possono avere lo stesso `code` e l'utente vuole essere certo di star cancellando quello giusto. Lista non ordinata semplice, zona omessa se assente sul posto.
+- **Modal di conferma prenotazione più informativo** ([`BookingDialog.tsx`](apps/web/src/components/BookingDialog.tsx)): stesso trattamento, simmetrico al modal cancel. `BookingTarget` esteso con `siteName`, `floorName`, `zoneName: string | null`. [`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx) li popola al click sulla row (sede dal filtro corrente — sempre obbligatorio, piano da `floorById`, zona da `spot.zoneName`).
+- **Deep link `?date=...` apre in Lista** ([`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx)): atterrando su `/parking?date=2026-06-15` (click su un giorno nel calendario di /my-reservations) la pagina parte già in vista Lista filtrata sul giorno scelto, invece che in Calendario di default. Coerente con l'intent "guarda i posti di QUEL giorno". Default Calendario resta per gli accessi senza query string.
+
+## 2026-06-09 — Calendario su /my-reservations + bug fix + MAX_DAYS_AHEAD da env
+
+Tre interventi piccoli sopra la feature calendario.
+
+- **Bug fix bordo `--mine` su SpotsBrowser** ([`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx)): l'effect che popolava `myReservedDates` filtrava solo per `r.spot.type`. Cambiando sede/piano restavano bordi "fantasma" su giorni in cui l'utente aveva prenotato altrove. Aggiunti i filtri `r.spot.floor.site.id !== siteId` e `r.spot.floor.id !== floorId`, e relativi `siteId`/`floorId` alle deps dell'effect (refetch al cambio filtro: lo stesso pattern del fetch availability).
+- **`MAX_DAYS_AHEAD` da env var**: prima era hardcoded `30` in 3 posti (`spots.service.ts`, `reservations.service.ts`, `SpotsCalendar.tsx`) + 1 const orfana in shared.
+  - Backend: nuovo modulo [`apps/api/src/common/business-rules.ts`](apps/api/src/common/business-rules.ts) che legge `process.env.MAX_DAYS_AHEAD` (fallback 30). I service lo importano da lì.
+  - Frontend: `process.env.NEXT_PUBLIC_MAX_DAYS_AHEAD` letto a build-time in [`SpotsCalendar.tsx`](apps/web/src/components/SpotsCalendar.tsx). Le due env vanno tenute in pari.
+  - `.env.example` aggiornato con commento dedicato.
+  - Rimossa la const `MAX_DAYS_AHEAD` orfana da [`packages/shared/src/reservation.schema.ts`](packages/shared/src/reservation.schema.ts) (non era importata da nessuno).
+- **Vista Calendario su /my-reservations**:
+  - Toggle Lista/Calendario a livello pagina (Carbon `ContentSwitcher`, condiviso tra i due tab PARKING/DESK).
+  - Calendario in modalità **`showAvailability=false`**: niente fetch disponibilità, niente pallini. Solo bordo blu sui giorni della propria lista (calcolati inline da `parkingItems`/`deskItems`). Click su un giorno qualsiasi entro il range valido naviga a `/parking?date=YYYY-MM-DD` o `/desks?date=...` per prenotare un nuovo posto.
+  - Aggiunta prop `showAvailability?: boolean` (default `true`) a [`SpotsCalendar.tsx`](apps/web/src/components/SpotsCalendar.tsx): skip del fetch + cella cliccabile in tutto il range valido (non più dipendente da `info`).
+  - Deep link: aggiunta prop `initialDate?: string` a [`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx) con sanitize fallback su today (rifiuta date malformate o nel passato). [`/parking/page.tsx`](apps/web/src/app/(app)/parking/page.tsx) e [`/desks/page.tsx`](apps/web/src/app/(app)/desks/page.tsx) leggono `searchParams.date` e lo propagano.
+- **Test data — sede con 1 posto** ([`apps/api/prisma/test-data/seed-1-spot-site.sql`](apps/api/prisma/test-data/seed-1-spot-site.sql)): script SQL idempotente per creare una sede di test con un singolo posto auto, utile per testare l'esaurimento (pallino rosso, riga rossa, 409 al secondo submit). Lanciabile con `psql` o dallo SQL editor di Supabase. Non tocca le altre sedi del seed principale.
+
+## 2026-06-09 — Vista Calendario su /parking e /desks
+
+Toggle "Lista" / "Calendario" in [`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx). In modalità calendario si vede il mese corrente con un pallino verde + numero posti residui per i giorni con disponibilità, rosso per i giorni pieni, grigio per i giorni fuori range (`oggi → oggi+30gg`). I giorni con propria prenotazione attiva del tipo (PARKING/DESK) hanno bordo blu (Carbon blue-60). Click su un giorno disponibile → setta `date` e torna alla Vista Lista.
+
+**Decisione iniziale**: il TODO prevedeva la calendar su `/my-reservations`, ma in discussione è emerso che il caso d'uso ("vedo il mese e scelgo quando prenotare") porta valore solo nel flow di booking. `/my-reservations` resta una lista. TODO aggiornato di conseguenza.
+
+- **Backend**:
+  - Nuovo endpoint `GET /spots/availability?from&to&type&siteId?&floorId?` ([`spots.controller.ts`](apps/api/src/spots/spots.controller.ts)).
+  - [`SpotsService.availability()`](apps/api/src/spots/spots.service.ts): due query (spots filtrati + reservations ACTIVE in range), group-by-date in memoria, output `[{date, available, total}]`. Range cap a `MAX_DAYS_AHEAD+1` per evitare payload abnormi.
+  - Schemi Zod: [`SpotsAvailabilityQuerySchema` + `SpotsAvailabilityDaySchema`](packages/shared/src/spot.schema.ts).
+- **Frontend**:
+  - Nuovo componente [`SpotsCalendar.tsx`](apps/web/src/components/SpotsCalendar.tsx) (~250 righe, griglia 7×N custom). Scartato Carbon `DatePicker inline` perché il flatpickr `onDayCreate` non è esposto come prop e accederci via ref è fragile.
+  - Header con prev/next + label mese in italiano (`Intl.DateTimeFormat("it-IT")`); riga giorni-settimana lun-dom; celle giorno con `<button>` (a11y: aria-label informativo, focus-visible Carbon blue).
+  - Date in UTC ovunque per coerenza con la colonna Postgres `@db.Date` (gli helper `isoFromUtc`/`todayUtc`/`startOfMonthUtc`/`endOfMonthUtc`/`weekdayIndexLunDom` stanno nel componente).
+  - `myReservedDates: Set<string>` calcolato in [`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx) via `api.listMyReservations()` filtrato per `r.spot.type === type`. Effect on-demand: fetch quando `view === "calendar"` e ad ogni `reloadTick` (dopo create/cancel l'overlay si aggiorna).
+  - DatePicker filtro Data nascosto in vista Calendario (ridondante: il calendario stesso è il picker).
+- **Stili** ([`globals.scss`](apps/web/src/styles/globals.scss)): nuove classi `.rsv-page-header-row`, `.rsv-calendar`, `.rsv-calendar-header/-month-label/-weekdays/-grid`, `.rsv-calendar-day` con varianti `--available/--full/--mine/--disabled/--pad`, `.rsv-calendar-pill--available/--full`. Bordo `--mine` reso con `box-shadow: inset` per non shiftare il layout.
+- **Edge case gestiti**: mese che attraversa il limite `oggi+30gg` → backend rifiuterebbe; il client tronca `to` a `oggi+30gg` lato fetch e disegna i giorni oltre come `--disabled`. Mese interamente nel passato/futuro fuori range → nessun fetch, tutte celle grigie. Bottoni prev/next disabled quando il mese adiacente è interamente fuori range.
+
 ## 2026-05-25 — Refresh manuale + auto-refresh dopo conflitto 409
 
 Aggiornamento dati tabella scelto come combinazione (b) + (c) — niente polling per ora (MVP).
