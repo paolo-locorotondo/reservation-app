@@ -111,6 +111,13 @@ model Reservation {
   date      DateTime          @db.Date
   status    ReservationStatus @default(ACTIVE)
   createdAt DateTime          @default(now())
+  // Aggiornato automaticamente da Prisma a ogni `update`. Utile per tracciare
+  // QUANDO una prenotazione è stata cancellata (cancel = update di status):
+  // basta filtrare per `status='CANCELLED'` e leggere `updatedAt`.
+  // `@default(now())` serve solo per backfillare le righe esistenti al
+  // momento dell'ALTER TABLE: per i nuovi record `@updatedAt` lo sovrascrive
+  // ad ogni create/update.
+  updatedAt DateTime          @default(now()) @updatedAt
   user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   spot      Spot              @relation(fields: [spotId], references: [id], onDelete: Cascade)
 
