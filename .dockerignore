@@ -1,0 +1,53 @@
+# Senza questo file il `docker build` copia node_modules locale (centinaia di
+# MB) e il bundle .next/dist nel build context, rendendo il build lentissimo.
+
+# Dependencies
+node_modules
+**/node_modules
+.pnpm-store
+
+# Build output (ricreato dentro l'immagine)
+dist
+**/dist
+.next
+**/.next
+out
+*.tsbuildinfo
+
+# Env files (i secret arrivano via env del container)
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+
+# Git
+.git
+.gitignore
+
+# Logs / cache
+*.log
+.pnpm-debug.log*
+coverage
+.nyc_output
+
+# Tests / e2e
+playwright-report
+test-results
+playwright/.cache
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Docker stuff (non serve dentro le immagini)
+docker-compose*.yml
+**/Dockerfile
+.dockerignore
+
+# Documentation (non serve a runtime)
+README.md
+CHANGELOG.md
+TODO.md

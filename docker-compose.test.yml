@@ -1,0 +1,68 @@
+# Compose dedicato al test delle immagini Docker prima del deploy su IBM Cloud.
+# Builda e avvia api + web puntando al Postgres remoto (Supabase) configurato in .env.
+#
+# NB: NON avvia un Postgres locale. Quello sta in `docker-compose.yml` separato.
+#
+# Uso:
+#   docker compose -f docker-compose.test.yml build
+#   docker compose -f docker-compose.test.yml up
+#
+# Per ricostruire solo un servizio:
+#   docker compose -f docker-compose.test.yml build api
+#   docker compose -f docker-compose.test.yml up -d api
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: reservation-app/api:local
+    container_name: reservation-api-test
+    restart: unless-stopped
+    environment:
+      # Le credenziali arrivano dal `.env` della root (Compose lo carica
+      # automaticamente quando vede ${VAR}). DATABASE_URL/DIRECT_URL devono
+      # puntare a un Postgres raggiungibile dal container — tipicamente Supabase
+      # remoto. NON usare URL `localhost` qui: dentro il container `localhost`
+      # è il container stesso, non l'host.
+      DATABASE_URL: ${DATABASE_URL}
+      DIRECT_URL: ${DIRECT_URL}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      ADMIN_EMAILS: ${ADMIN_EMAILS}
+      # Regola business: max giorni nel futuro per cui si può prenotare.
+      # Letta a runtime (process.env). Fallback 30 se omessa.
+      MAX_DAYS_AHEAD: ${MAX_DAYS_AHEAD:-30}
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Next inline-a le NEXT_PUBLIC_* nel bundle al build: vanno passate qui
+        # (build arg), non come env runtime. Il Dockerfile le riceve via
+        # `ARG NEXT_PUBLIC_MAX_DAYS_AHEAD` e le promuove a ENV prima di
+        # `next build`.
+        NEXT_PUBLIC_MAX_DAYS_AHEAD: ${NEXT_PUBLIC_MAX_DAYS_AHEAD:-30}
+    image: reservation-app/web:local
+    container_name: reservation-web-test
+    restart: unless-stopped
+    environment:
+      # `web` chiama l'API via la rete interna di Compose: hostname = nome servizio.
+      API_INTERNAL_URL: http://api:3001
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      AZURE_AD_TENANT_ID: ${AZURE_AD_TENANT_ID}
+      AZURE_AD_CLIENT_ID: ${AZURE_AD_CLIENT_ID}
+      AZURE_AD_CLIENT_SECRET: ${AZURE_AD_CLIENT_SECRET}
+      ADMIN_EMAILS: ${ADMIN_EMAILS}
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api

@@ -3,10 +3,12 @@
 
 generator client {
   provider      = "prisma-client-js"
-  // "native" per lo sviluppo locale (Windows/macOS), "rhel-openssl-3.0.x" per il
-  // runtime Linux di Vercel (Node 20). Senza questo target, in produzione
-  // Prisma fallisce con "Query engine binary for current platform not found".
-  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+  // "native" per lo sviluppo locale (Windows/macOS).
+  // "rhel-openssl-3.0.x"   → Vercel (Amazon Linux derivato RHEL).
+  // "debian-openssl-3.0.x" → Docker image node:20-bookworm-slim usata per Code Engine / IBM Cloud.
+  // Senza i target Linux, in produzione Prisma fallisce con
+  // "Query engine binary for current platform not found".
+  binaryTargets = ["native", "rhel-openssl-3.0.x", "debian-openssl-3.0.x"]
 }
 
 datasource db {
