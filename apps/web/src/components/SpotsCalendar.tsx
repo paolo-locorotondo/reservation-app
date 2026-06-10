@@ -105,6 +105,16 @@ export function SpotsCalendar({
       setData(new Map());
       return;
     }
+    // SpotsBrowser monta con siteId="" e lo popola DOPO che listSites() ha
+    // risposto. Senza questo skip, il primo fetch parte con siteId omesso →
+    // backend ritorna la disponibilità sommata su tutte le sedi (numeri grossi
+    // tipo 90), poi al cambio di siteId rifa il fetch e i numeri si correggono.
+    // Se la prima risposta arriva dopo la seconda (race), l'utente vede i
+    // numeri sbagliati finché non fa refresh.
+    if (!siteId) {
+      setData(new Map());
+      return;
+    }
     // Mese interamente fuori dal range valido: nessun fetch, calendar disabled.
     if (fetchFrom.getTime() > fetchTo.getTime()) {
       setData(new Map());
@@ -112,22 +122,36 @@ export function SpotsCalendar({
     }
     setLoading(true);
     setError(null);
+    // Cleanup guard: se i filtri cambiano mentre questo fetch è in volo, la
+    // sua risposta verrà ignorata. Evita di sovrascrivere `data` con il
+    // risultato di una richiesta ormai obsoleta (race condition classica).
+    let cancelled = false;
     api
       .listAvailability({
         type,
         from: isoFromUtc(fetchFrom),
         to: isoFromUtc(fetchTo),
-        siteId: siteId || undefined,
+        siteId,
         floorId: floorId || undefined,
         zoneName: zoneName || undefined,
       })
       .then((arr) => {
+        if (cancelled) return;
         const m = new Map<string, { available: number; total: number }>();
         for (const d of arr) m.set(d.date, { available: d.available, total: d.total });
         setData(m);
       })
-      .catch((e: ApiError) => setError(`Caricamento disponibilità: ${e.message}`))
-      .finally(() => setLoading(false));
+      .catch((e: ApiError) => {
+        if (cancelled) return;
+        setError(`Caricamento disponibilità: ${e.message}`);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
     // currentMonth.getTime() invece dell'oggetto Date per stabilizzare la dep
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAvailability, type, siteId, floorId, zoneName, currentMonth.getTime()]);
