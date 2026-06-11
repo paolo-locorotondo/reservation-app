@@ -369,7 +369,13 @@ main {
 }
 .rsv-calendar-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  // `minmax(0, 1fr)` invece di `1fr`: le colonne hanno la stessa larghezza
+  // anche quando una cella contiene contenuto lungo (es. "Bari · P-01").
+  // Con `1fr` puro, la grid rispetta la `min-content` di ogni colonna e
+  // forza le colonne con label larga ad essere più ampie delle altre,
+  // facendo collassare l'ellipsis. `minmax(0, 1fr)` rilassa il min, il
+  // testo eccedente viene troncato dal `text-overflow: ellipsis` della label.
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 0.25rem;
 }
 
@@ -382,6 +388,11 @@ main {
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
+  // `min-width: 0` permette alla cella di scendere sotto la larghezza
+  // intrinseca del contenuto (es. label "Bari · P-01") quando la colonna
+  // grid è stretta. Senza, l'ellipsis della label non scatta perché la
+  // cella si espande prima.
+  min-width: 0;
   min-height: 4rem;
   padding: 0.375rem 0.5rem;
   border: 1px solid #e0e0e0;
@@ -439,6 +450,22 @@ main {
   line-height: 1;
 }
 
+// Etichetta "Sede · Codice" dentro la cella dei giorni-mio nel calendar di
+// /my-reservations (alternativo ai pallini di availability che lì non si
+// usano). Mostrata sotto il numero del giorno, con ellipsis se troppo lunga
+// — l'utente può sempre cliccare per aprire il modal e vedere full info.
+.rsv-calendar-day-label {
+  align-self: stretch;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: #0f62fe; // Carbon blue-60, coerente col bordo --mine
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 // Pallino in basso a destra. `--available` mostra il numero, `--full` è solo
 // un puntino rosso senza testo.
 .rsv-calendar-pill {
@@ -468,8 +495,13 @@ main {
 
 // Mobile: celle più compatte ma sempre leggibili.
 @media (max-width: 671px) {
+  // min-height generoso per ospitare SEMPRE numero + (eventuale) label senza
+  // shifting: le celle senza label avranno semplicemente spazio vuoto in
+  // basso, ma tutte le righe del calendar avranno la stessa altezza.
+  // Senza questo, le righe con almeno una cella-mio (label visibile)
+  // sarebbero più alte delle altre, dando un effetto layout traballante.
   .rsv-calendar-day {
-    min-height: 3rem;
+    min-height: 4rem;
     padding: 0.25rem 0.375rem;
     font-size: 0.75rem;
   }
@@ -480,5 +512,11 @@ main {
     min-width: 1.25rem;
     height: 1.25rem;
     font-size: 0.6875rem;
+  }
+  // Label "Sede · Codice" più piccola su mobile. Dato che viene comunque
+  // troncata con ellipsis, il valore informativo principale è il prefisso
+  // (sede). Tap = modal con info complete.
+  .rsv-calendar-day-label {
+    font-size: 0.625rem;
   }
 }

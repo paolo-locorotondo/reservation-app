@@ -2,6 +2,17 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-11 — Etichetta "Sede · Codice" nel calendario di /my-reservations
+
+Migliorata la vista Calendario su `/my-reservations`: prima i giorni con propria prenotazione avevano solo un bordo blu, senza indicazione di QUALE prenotazione fosse. Ora la cella mostra anche un'etichetta `"<sede> · <codice>"` (es. `"Bari · P-01"`).
+
+- [`SpotsCalendar.tsx`](apps/web/src/components/SpotsCalendar.tsx): nuova prop opzionale `myReservationLabels?: Map<string, string>`. Quando presente E `showAvailability=false`, la cella renderizza un `<span class="rsv-calendar-day-label">` sotto il numero del giorno. Su `/parking` e `/desks` (che girano con `showAvailability=true`) la prop viene ignorata: lì restano i pallini availability.
+- [`MyReservationsList.tsx`](apps/web/src/components/MyReservationsList.tsx): due nuove `useMemo` (`parkingLabels`, `deskLabels`) che mappano `iso → "<site.name> · <spot.code>"` partendo da `parkingItems`/`deskItems`. Passate al rispettivo `SpotsCalendar`.
+- [`globals.scss`](apps/web/src/styles/globals.scss): nuova classe `.rsv-calendar-day-label` con ellipsis (testo troncato se la cella è stretta — l'utente può sempre cliccare per aprire il modal con info complete). Font ridotto su mobile (`0.625rem`) per rimanere leggibile nella cella compatta.
+- **Fix layout grid del calendar**: senza ulteriori interventi, una cella con label lunga forzava la sua colonna a essere più larga delle altre (col `1fr` puro la grid rispetta la `min-content` di ogni colonna). Risolto con `grid-template-columns: repeat(7, minmax(0, 1fr))` + `min-width: 0` su `.rsv-calendar-day`: le 7 colonne mantengono la stessa larghezza, l'overflow viene gestito dall'`text-overflow: ellipsis` della label.
+- **Min-height celle uniforme su mobile**: alzato da `3rem` a `4rem` per fare spazio sempre a numero + (eventuale) label. Senza, le righe con almeno una cella-mio risultavano più alte delle altre, creando un effetto layout traballante.
+- A11y: aggiornato `aria-label` della cella per leggere `"9 giugno 2026, prenotazione: Bari · P-01"` quando l'etichetta è presente.
+
 ## 2026-06-11 — Concorrenza prenotazioni: hardening DB-level (utente/giorno/tipo)
 
 Fix definitivo della race "stesso utente, doppio submit ravvicinato dello stesso tipo" segnalata nel TODO. Senza questo, due richieste in volo potevano vedere entrambe `existing === null` nel check applicativo e creare due ACTIVE PARKING (o DESK) per lo stesso utente/giorno — bug silente, peggiore della classe.

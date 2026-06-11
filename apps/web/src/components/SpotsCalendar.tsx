@@ -34,6 +34,11 @@ interface Props {
   // YYYY-MM-DD delle proprie prenotazioni ACTIVE per `type`. Usato come
   // overlay (bordo) sulle celle.
   myReservedDates: Set<string>;
+  // Etichetta opzionale da mostrare nelle celle dei giorni-mio (es. "Bari ·
+  // P-01"). Visibile solo quando `showAvailability=false` — sennò i pallini
+  // di disponibilità si scontrano col testo. In /my-reservations è la
+  // sostituzione naturale dei pallini, in /parking|/desks resta vuota.
+  myReservationLabels?: Map<string, string>;
   onDayClick: (iso: string) => void;
   // Default true: la pagina /parking|/desks vuole vedere i pallini availability.
   // false in /my-reservations: lì la calendar serve come panoramica delle
@@ -78,6 +83,7 @@ export function SpotsCalendar({
   floorId,
   zoneName,
   myReservedDates,
+  myReservationLabels,
   onDayClick,
   showAvailability = true,
 }: Props) {
@@ -281,6 +287,12 @@ export function SpotsCalendar({
                 .filter(Boolean)
                 .join(" ");
 
+              // Label "sede · codice" da mostrare nei giorni-mio quando non
+              // ci sono i pallini availability (in /my-reservations). Se
+              // assente, la cella resta solo col bordo blu.
+              const myLabel =
+                !showAvailability && isMine ? myReservationLabels?.get(c.iso) : undefined;
+
               return (
                 <button
                   key={c.iso}
@@ -293,14 +305,16 @@ export function SpotsCalendar({
                       ? `${c.day} ${monthLabelCap}, ${info!.available} posti disponibili${isMine ? ", hai una prenotazione" : ""}`
                       : isFull
                         ? `${c.day} ${monthLabelCap}, tutti i posti occupati${isMine ? ", hai una prenotazione" : ""}`
-                        : `${c.day} ${monthLabelCap}`
+                        : myLabel
+                          ? `${c.day} ${monthLabelCap}, prenotazione: ${myLabel}`
+                          : `${c.day} ${monthLabelCap}`
                   }
                   title={
                     isAvailable
                       ? `${info!.available} disponibili su ${info!.total}`
                       : isFull
                         ? `Tutti i ${info!.total} posti occupati`
-                        : undefined
+                        : myLabel ?? undefined
                   }
                 >
                   <span className="rsv-calendar-day-number">{c.day}</span>
@@ -310,6 +324,7 @@ export function SpotsCalendar({
                     </span>
                   )}
                   {isFull && <span className="rsv-calendar-pill rsv-calendar-pill--full" />}
+                  {myLabel && <span className="rsv-calendar-day-label">{myLabel}</span>}
                 </button>
               );
             })}

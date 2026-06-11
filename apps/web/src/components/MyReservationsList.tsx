@@ -137,6 +137,26 @@ export function MyReservationsList() {
     [deskItems],
   );
 
+  // Etichetta "sede · codice" mostrata dentro la cella del calendario per i
+  // giorni-mio (solo in /my-reservations, dove la calendar gira con
+  // showAvailability=false). Es: "Bari · P-01". Se mai esistessero più
+  // prenotazioni stesso utente / stesso giorno / stesso tipo, vince l'ultima
+  // (caso impedito DB-level dal partial unique index, quindi non succede).
+  const parkingLabels = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of parkingItems) {
+      m.set(String(r.date).slice(0, 10), `${r.spot.floor.site.name} · ${r.spot.code}`);
+    }
+    return m;
+  }, [parkingItems]);
+  const deskLabels = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of deskItems) {
+      m.set(String(r.date).slice(0, 10), `${r.spot.floor.site.name} · ${r.spot.code}`);
+    }
+    return m;
+  }, [deskItems]);
+
   function handleCancelled(msg: string) {
     setSuccessMsg(msg);
     setReloadTick((t) => t + 1);
@@ -301,6 +321,7 @@ export function MyReservationsList() {
                   siteId=""
                   floorId=""
                   myReservedDates={parkingDates}
+                  myReservationLabels={parkingLabels}
                   onDayClick={(iso) => handleCalendarDayClick("PARKING", iso)}
                   showAvailability={false}
                 />
@@ -323,6 +344,7 @@ export function MyReservationsList() {
                   siteId=""
                   floorId=""
                   myReservedDates={deskDates}
+                  myReservationLabels={deskLabels}
                   onDayClick={(iso) => handleCalendarDayClick("DESK", iso)}
                   showAvailability={false}
                 />

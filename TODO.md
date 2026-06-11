@@ -2,10 +2,6 @@
 
 Backlog dei prossimi step, in ordine di priorità da discutere. Voci completate nello storico in [CHANGELOG.md](./CHANGELOG.md).
 
-## Migliorie vista Calendario nelle my-reservations
-Rispetto alla vista calendario delle pagine desks e parking, la vista calendario nella pagina my-reservations non ha pallini verdi/rossi con numeri.
-Quindi ho pensato che fosse utile inserire, al posto dei pallini verdi/rossi coi numeri, un testo col formato "Site.name + Spot.code".
-
 ## Unificare Parking + Desks in una pagina con tab
 
 Oggi sono due pagine separate (`/parking`, `/desks`) che usano lo stesso `SpotsBrowser` con `type` diverso. La proposta è una singola pagina `/spots` (o `/book`) con due tab "Posti auto" / "Scrivanie", come `/my-reservations`.
