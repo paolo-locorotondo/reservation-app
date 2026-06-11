@@ -2,6 +2,26 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-11 — Concorrenza prenotazioni: hardening DB-level (utente/giorno/tipo)
+
+Fix definitivo della race "stesso utente, doppio submit ravvicinato dello stesso tipo" segnalata nel TODO. Senza questo, due richieste in volo potevano vedere entrambe `existing === null` nel check applicativo e creare due ACTIVE PARKING (o DESK) per lo stesso utente/giorno — bug silente, peggiore della classe.
+
+**Approccio**: opzione 1 del TODO (denormalizzare `spotType` su `Reservation` + partial unique index SQL). Coerente col pattern già in uso per l'esclusività `(spotId, date)` ACTIVE.
+
+- **Schema** [`schema.prisma`](apps/api/prisma/schema.prisma): nuovo campo `spotType: SpotType` su `Reservation`. Denormalizzazione di `Spot.type` (campo stabile — un posto non cambia tipo). Serve al partial unique index sotto, che altrimenti dovrebbe colpire una colonna join non esprimibile in Postgres.
+- **Migration** [`20260611_add_spot_type_user_active_partial_unique`](apps/api/prisma/migrations/): generata con `--create-only` e SQL editato a mano (Prisma non supporta partial index nativamente):
+  1. `ALTER TABLE ADD COLUMN "spotType" "SpotType"` (nullable, per non rompere righe esistenti)
+  2. Backfill: `UPDATE Reservation SET spotType = (SELECT type FROM Spot ...)`
+  3. `ALTER TABLE ALTER COLUMN ... SET NOT NULL`
+  4. `CREATE UNIQUE INDEX "Reservation_userId_date_spotType_active_key" ON "Reservation"(userId,date,spotType) WHERE status='ACTIVE'`. Il `WHERE` preserva la possibilità di più CANCELLED storiche sulla stessa slot, come l'altro partial index.
+  Applicata sia al Postgres locale sia a Supabase via `prisma migrate deploy`.
+- **Service** [`reservations.service.ts`](apps/api/src/reservations/reservations.service.ts):
+  - `create()` ora popola `spotType: spot.type` nella INSERT.
+  - Il check soft `findFirst` usa `spotType` direttamente invece del join `spot: { type }` — più efficiente, no JOIN.
+  - Il catch P2002 distingue best-effort i due index via `e.meta?.target`: se include `userId` → messaggio "hai già un posto auto/scrivania prenotata per questa data"; altrimenti "posto già prenotato per questa data". Coerente coi messaggi del check soft.
+- **Race-safety**: la regola "max 1 ACTIVE per (utente, giorno, tipo)" è ora **DB-enforced**. Anche con doppio submit ravvicinato, il secondo INSERT solleva P2002 → `ConflictException` 409. Scartata l'opzione 2 (transazione `Serializable`): più codice, gestione di `40001 serialization_failure` con retry, meno robusto.
+- **Test data** [`seed-1-spot-site.sql`](apps/api/prisma/test-data/seed-1-spot-site.sql): nessuna modifica necessaria (gli INSERT di Spot non hanno cambiato struttura). La sede di test resta valida per riprovare manualmente lo scenario "doppia prenotazione" — ora il backend rifiuta con 409 anche su race.
+
 ## 2026-06-09 — Rifiniture calendario: filtro zona, copy dinamica, scorciatoie
 
 Cinque interventi piccoli a valle dei feedback d'uso.

@@ -16,10 +16,18 @@ export class ReservationsService {
   /**
    * Regole applicative:
    *  - spot deve esistere ed essere `active`
-   *  - data ∈ [oggi, oggi+30 giorni] in UTC
-   *  - utente non può avere altra ACTIVE con stesso (date, spot.type)
-   * La race su doppia ACTIVE per lo stesso spot/giorno è gestita dall'unique
-   * @@unique([spotId, date, status]) → P2002 → 409.
+   *  - data ∈ [oggi, oggi+MAX_DAYS_AHEAD] in UTC
+   *  - utente non può avere altra ACTIVE con stesso (date, spotType)
+   *
+   * Race-safety:
+   *  - Doppia ACTIVE su (spotId, date): partial unique index
+   *    `Reservation_spotId_date_active_key` → P2002 → 409.
+   *  - Doppia ACTIVE su (userId, date, spotType) — ovvero "stesso utente,
+   *    doppio submit ravvicinato dello stesso tipo": partial unique index
+   *    `Reservation_userId_date_spotType_active_key` → P2002 → 409.
+   * Il `findFirst` qui sotto resta come check "soft": evita di lanciare una
+   * INSERT destinata a fallire quando l'utente ha già la prenotazione (caso
+   * normale, non race), e dà un messaggio italiano più specifico del 409 generico.
    */
   async create(userId: string, dto: CreateReservationDto) {
     const date = parseDateUtc(dto.date);
@@ -31,12 +39,13 @@ export class ReservationsService {
     if (!spot) throw new NotFoundException("posto non trovato");
     if (!spot.active) throw new ConflictException("posto non attivo");
 
+    // Usa `spotType` direttamente (denormalizzato): niente join verso Spot.
     const existing = await this.prisma.reservation.findFirst({
       where: {
         userId,
         date,
         status: "ACTIVE",
-        spot: { type: spot.type },
+        spotType: spot.type,
       },
       select: { id: true },
     });
@@ -50,11 +59,33 @@ export class ReservationsService {
 
     try {
       return await this.prisma.reservation.create({
-        data: { userId, spotId: spot.id, date, status: "ACTIVE" },
+        data: {
+          userId,
+          spotId: spot.id,
+          // Denormalizzazione: serve al partial unique index
+          // (userId, date, spotType) WHERE status='ACTIVE' di garantire la
+          // regola "max 1 ACTIVE per utente/giorno/tipo" anche su race.
+          spotType: spot.type,
+          date,
+          status: "ACTIVE",
+        },
         include: { spot: true },
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+        // Due possibili index in collisione: spot già preso oppure utente che
+        // sta facendo un doppio submit. `e.meta?.target` può essere un array
+        // di campi o il nome dell'index (dipende dal driver). Distinguiamo
+        // best-effort per dare il messaggio più appropriato.
+        const target = (e.meta as { target?: string | string[] } | undefined)?.target;
+        const t = Array.isArray(target) ? target.join(",") : (target ?? "");
+        if (t.includes("userId")) {
+          throw new ConflictException(
+            spot.type === "PARKING"
+              ? "hai già un posto auto prenotato per questa data"
+              : "hai già una scrivania prenotata per questa data",
+          );
+        }
         throw new ConflictException("posto già prenotato per questa data");
       }
       throw e;

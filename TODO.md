@@ -2,6 +2,10 @@
 
 Backlog dei prossimi step, in ordine di priorità da discutere. Voci completate nello storico in [CHANGELOG.md](./CHANGELOG.md).
 
+## Migliorie vista Calendario nelle my-reservations
+Rispetto alla vista calendario delle pagine desks e parking, la vista calendario nella pagina my-reservations non ha pallini verdi/rossi con numeri.
+Quindi ho pensato che fosse utile inserire, al posto dei pallini verdi/rossi coi numeri, un testo col formato "Site.name + Spot.code".
+
 ## Unificare Parking + Desks in una pagina con tab
 
 Oggi sono due pagine separate (`/parking`, `/desks`) che usano lo stesso `SpotsBrowser` con `type` diverso. La proposta è una singola pagina `/spots` (o `/book`) con due tab "Posti auto" / "Scrivanie", come `/my-reservations`.
@@ -21,25 +25,6 @@ Decisione da prendere: **unificare** o **lasciare separato**? Nel dubbio, postic
 - **Priority**: 🟢 LOW
 - **Stato**: 🔴 TODO
 
-## Concorrenza prenotazioni — verifica e hardening
-
-Verifica fatta sul codice attuale (`apps/api/src/reservations/reservations.service.ts`):
-
-- ✅ **Due utenti sullo stesso spot/giorno**: protetta dal vincolo DB `@@unique([spotId, date, status])`. Il secondo `INSERT` solleva Prisma P2002 → mappato a `ConflictException` ("posto già prenotato per questa data"). Race-safe.
-- ⚠️ **Stesso utente, doppio submit ravvicinato (es. due click rapidi su mobile)**: il check "hai già un posto auto/scrivania per questa data" è `findFirst` seguito da `create`, NON transazionale. Due richieste in volo potrebbero entrambe vedere `existing === null` e creare due ACTIVE dello stesso tipo per lo stesso utente/giorno. Mitigazioni possibili:
-  1. Aggiungere un vincolo DB tipo `@@unique([userId, date, spotType, status])` — richiede però di denormalizzare `spotType` su `Reservation` (oggi sta solo su `Spot`).
-  2. Avvolgere check + create in `prisma.$transaction` con isolation `Serializable`.
-  3. Lato FE: disabilitare il bottone "Conferma" in `BookingDialog` durante l'inflight (probabilmente già fatto, da verificare).
-
-### Note dalla verifica (2026-05-25)
-
-- ✅ **FE inflight già coperto**: `BookingDialog.tsx` disabilita il bottone Prenota tramite `primaryButtonDisabled={submitting}` e blocca anche `onRequestClose` mentre `submitting` è true. Nessun intervento necessario sul punto 3.
-- 🔍 **Pattern già in uso nel progetto**: lo unique "una sola ACTIVE per spot/giorno" NON è un `@@unique` Prisma ma un **partial unique index SQL** (`CREATE UNIQUE INDEX ... ON "Reservation"("spotId","date") WHERE status='ACTIVE'`, vedi commento in `schema.prisma`). Motivo: un `@@unique` pieno su `(spotId,date,status)` impedirebbe più CANCELLED storiche per lo stesso spot/giorno. Lo stesso pattern è applicabile per il caso utente.
-- 💡 **Approccio consigliato quando si farà il fix**: opzione 1 — denormalizzare `spotType` su `Reservation` (campo stabile, un posto non cambia tipo) + partial unique `WHERE status='ACTIVE'` su `(userId, date, spotType)`. Coerente con l'altro partial index, garanzia DB-level che sopravvive a bug applicativi. Richiede migration con backfill da `Spot.type`. Il check `findFirst` esistente resta come validazione "soft" per dare messaggi italiani user-friendly senza far partire una INSERT destinata a fallire.
-- ❌ **Scartata opzione 2** (transazione `Serializable`): eviterebbe la denormalizzazione ma introduce gestione di `40001 serialization_failure` con retry — più codice, meno robusto.
-- **Priority**: 🟡 MED (probabilità bassa in pratica, ma è la classe di bug peggiore — silente)
-- **Stato**: 🟡 VERIFICATO — fix non implementato (da fare quando si valuta priorità)
-
 ## Analisi: ruoli, permessi e regole di business
 
 Sezione di **analisi** (non ancora progettazione). Raccoglie tutto ciò che ruota attorno a "chi può fare cosa, e quali parametri sono regolabili senza redeploy". Confluiscono qui due cose che prima erano separate: la pagina Admin/HR (chi vede le prenotazioni altrui) e la gestione delle regole configurabili (festività, posti riservati, parametri).
@@ -57,8 +42,8 @@ Tre piani da non confondere:
 Sono prevalentemente di tipo (A). Solo le 5 e 7 toccano (B) in modo binario `USER` / `ADMIN`.
 
 1. **Range temporale di prenotazione**. Una `date` di prenotazione deve essere `>= oggi` e `<= oggi + MAX_DAYS_AHEAD` (UTC). Default 30 giorni, configurabile via env (`MAX_DAYS_AHEAD` per l'API + `NEXT_PUBLIC_MAX_DAYS_AHEAD` build-time per il frontend). Validato in `parseDateUtc` di [`spots.service.ts`](apps/api/src/spots/spots.service.ts) e [`reservations.service.ts`](apps/api/src/reservations/reservations.service.ts).
-2. **Quota personale per tipo, per giorno**. Un utente può avere al massimo **1 prenotazione ACTIVE per ciascun `spotType`** nello stesso giorno: quindi 1 posto auto + 1 scrivania al massimo nello stesso giorno. Check in `ReservationsService.create()` via `findFirst` su `(userId, date, status='ACTIVE', spot.type)`. NB: protezione "soft" (race possibile su doppio submit ravvicinato — vedi "Concorrenza prenotazioni").
-3. **Esclusività spot/giorno**. Per un dato `spotId` e `date` può esistere al massimo **1 prenotazione `ACTIVE`**. Garanzia DB-level via partial unique index SQL `WHERE status='ACTIVE'` (vedi commento in `schema.prisma`). Race-safe: P2002 → `ConflictException`.
+2. **Quota personale per tipo, per giorno**. Un utente può avere al massimo **1 prenotazione ACTIVE per ciascun `spotType`** nello stesso giorno: quindi 1 posto auto + 1 scrivania al massimo nello stesso giorno. Garanzia DB-level via partial unique index SQL `Reservation_userId_date_spotType_active_key WHERE status='ACTIVE'` (richiede `spotType` denormalizzato su `Reservation`). Race-safe: P2002 → `ConflictException` con messaggio italiano discriminato per tipo. Il `findFirst` in `create()` resta come validazione "soft" per intercettare il caso normale (utente che ha già prenotato, no race) senza far partire una INSERT destinata a fallire.
+3. **Esclusività spot/giorno**. Per un dato `spotId` e `date` può esistere al massimo **1 prenotazione `ACTIVE`**. Garanzia DB-level via partial unique index SQL `Reservation_spotId_date_active_key WHERE status='ACTIVE'`. Race-safe: P2002 → `ConflictException("posto già prenotato per questa data")`. Il `WHERE status='ACTIVE'` preserva la possibilità di più CANCELLED storiche sulla stessa slot.
 4. **Spot deve essere `active=true`**. Solo gli spot con `active=true` sono prenotabili. Quelli `active=false` filtrati a monte da `SpotsService.list()` e `availability()`. Difesa ulteriore in `create()` che rifiuta con `ConflictException("posto non attivo")`.
 5. **Cancellazione solo del proprio**. Solo il proprietario può cancellare la propria prenotazione. `cancel()` ritorna `NotFoundException` (404 deliberato per non leakare l'esistenza dell'ID). Nessun ruolo, nemmeno `ADMIN`, può cancellare prenotazioni altrui.
 6. **Cancellazione idempotente**. `cancel()` su una prenotazione già `CANCELLED` ritorna lo stato senza scrivere su DB. Difesa contro doppi click / refresh.

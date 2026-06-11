@@ -108,6 +108,13 @@ model Reservation {
   id        String            @id @default(cuid())
   userId    String
   spotId    String
+  // Denormalizzazione di Spot.type su Reservation: serve come campo del
+  // partial unique index `(userId, date, spotType) WHERE status='ACTIVE'` che
+  // garantisce a livello DB la regola "max 1 ACTIVE per utente/giorno/tipo".
+  // Senza denormalizzazione l'index dovrebbe essere su una colonna join e non
+  // è esprimibile in Postgres. Il valore è stabile (un posto non cambia
+  // tipo) e popolato in create() leggendolo da Spot.
+  spotType  SpotType
   date      DateTime          @db.Date
   status    ReservationStatus @default(ACTIVE)
   createdAt DateTime          @default(now())
@@ -121,11 +128,13 @@ model Reservation {
   user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   spot      Spot              @relation(fields: [spotId], references: [id], onDelete: Cascade)
 
-  // Unicità "una sola ACTIVE per spot+giorno" è gestita da un partial unique
-  // index in SQL (vedi migration `reservation_active_partial_unique`):
-  // CREATE UNIQUE INDEX ... ON "Reservation"("spotId","date") WHERE status='ACTIVE'
-  // Un @@unique pieno su (spotId,date,status) impedirebbe il secondo cancel
-  // dello stesso spot/giorno (collisione su CANCELLED già storica).
+  // Due partial unique index gestiti via SQL (Prisma non li modella):
+  //  - `Reservation_spotId_date_active_key` (migration reservation_active_partial_unique):
+  //     "max 1 ACTIVE per spot/giorno"
+  //  - `Reservation_userId_date_spotType_active_key` (migration in arrivo):
+  //     "max 1 ACTIVE per utente/giorno/tipo"
+  // Entrambi `WHERE status='ACTIVE'` per non impedire più CANCELLED storiche
+  // sulla stessa slot.
   @@index([userId, date])
   @@index([date, status])
 }
