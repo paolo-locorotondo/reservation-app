@@ -2,24 +2,6 @@
 
 Backlog dei prossimi step, in ordine di priorità da discutere. Voci completate nello storico in [CHANGELOG.md](./CHANGELOG.md).
 
-## Pagina Admin (manager / HR)
-
-Pagina riservata ai ruoli `ADMIN` (e da estendere a un eventuale ruolo `MANAGER`/`HR`) per vedere chi ha prenotato cosa e quando.
-
-Aspetti da definire:
-
-- **Scope visibilità**: HR vede tutto il personale; un manager vede solo i diretti riporti? Serve un campo `managerId` su `User`?
-- **Filtri attesi**: per intervallo date, sede, piano, tipo posto, utente (search), stato (`ACTIVE` / `CANCELLED`).
-- **Colonne della tabella**: Data, Utente (nome + email), Tipo (Posto auto / Scrivania), Codice posto, Sede, Piano, Zona, Stato, Creata il.
-- **Azioni admin**: poter cancellare la prenotazione di un altro utente? (utile se uno è in malattia e libera il posto). Da decidere — comportamento oggi: solo l'utente stesso può cancellare.
-- **Endpoint backend**: `GET /admin/reservations?from&to&siteId&floorId&type&userId&status` protetto da `RolesGuard(['ADMIN'])`. Restituisce reservation + user + spot expanded.
-- **Export**: CSV/Excel utile per HR? (probabilmente sì in fase 2).
-- **UI**: riusa il pattern `DataTable` + filtri header già usato in `SpotsBrowser` / `MyReservationsList`.
-- **Routing**: `apps/web/src/app/(app)/admin/reservations/page.tsx`. Voce in `UIShell` visibile solo se `me.role === "ADMIN"`.
-- **Seed**: il seed crea già un utente admin di test? Verificare e, se no, aggiungere.
-- **Priority**: 🟢 LOW (Per il momento l'Admin può usare query sul DB per fare la stessa cosa)
-- **Stato**: 🔴 TODO
-
 ## Unificare Parking + Desks in una pagina con tab
 
 Oggi sono due pagine separate (`/parking`, `/desks`) che usano lo stesso `SpotsBrowser` con `type` diverso. La proposta è una singola pagina `/spots` (o `/book`) con due tab "Posti auto" / "Scrivanie", come `/my-reservations`.
@@ -58,13 +40,123 @@ Verifica fatta sul codice attuale (`apps/api/src/reservations/reservations.servi
 - **Priority**: 🟡 MED (probabilità bassa in pratica, ma è la classe di bug peggiore — silente)
 - **Stato**: 🟡 VERIFICATO — fix non implementato (da fare quando si valuta priorità)
 
-## Vista Calendario su /my-reservations (estensione futura)
+## Analisi: ruoli, permessi e regole di business
 
-La vista calendario è stata implementata su `/parking` e `/desks` (vedi `CHANGELOG.md`): è lì che porta valore concreto, perché l'utente vuole vedere quando sono disponibili i posti del mese.
+Sezione di **analisi** (non ancora progettazione). Raccoglie tutto ciò che ruota attorno a "chi può fare cosa, e quali parametri sono regolabili senza redeploy". Confluiscono qui due cose che prima erano separate: la pagina Admin/HR (chi vede le prenotazioni altrui) e la gestione delle regole configurabili (festività, posti riservati, parametri).
 
-Su `/my-reservations` resta da valutare se aggiungere lo stesso toggle. Pro: panoramica visiva delle proprie prenotazioni. Contro: l'utente medio ha poche prenotazioni proprie, una griglia mensile di ~30 celle aggiunge poco rispetto alla lista.
+Tre piani da non confondere:
 
-Se si decide di farlo, il pattern è già pronto: riutilizzare `SpotsCalendar` con `myReservedDates` come signal primario (non più overlay) e disabilitare il fetch availability.
+- **(A) Validazioni "tecniche"**: vincoli di integrità (formati, range, unicità) che valgono per qualunque utente e che non vogliamo rendere configurabili.
+- **(B) Permessi per ruolo**: chi può vedere/modificare le prenotazioni di chi.
+- **(C) Eccezioni dinamiche**: dati gestibili da Admin/HR senza redeploy (festività, posti riservati, parametri come `MAX_DAYS_AHEAD`).
 
-- **Priority**: 🟢 LOW
-- **Stato**: 🔴 TODO (rivalutare dopo qualche settimana di uso reale)
+---
+
+### Stato attuale (snapshot delle regole già in vigore)
+
+Sono prevalentemente di tipo (A). Solo le 5 e 7 toccano (B) in modo binario `USER` / `ADMIN`.
+
+1. **Range temporale di prenotazione**. Una `date` di prenotazione deve essere `>= oggi` e `<= oggi + MAX_DAYS_AHEAD` (UTC). Default 30 giorni, configurabile via env (`MAX_DAYS_AHEAD` per l'API + `NEXT_PUBLIC_MAX_DAYS_AHEAD` build-time per il frontend). Validato in `parseDateUtc` di [`spots.service.ts`](apps/api/src/spots/spots.service.ts) e [`reservations.service.ts`](apps/api/src/reservations/reservations.service.ts).
+2. **Quota personale per tipo, per giorno**. Un utente può avere al massimo **1 prenotazione ACTIVE per ciascun `spotType`** nello stesso giorno: quindi 1 posto auto + 1 scrivania al massimo nello stesso giorno. Check in `ReservationsService.create()` via `findFirst` su `(userId, date, status='ACTIVE', spot.type)`. NB: protezione "soft" (race possibile su doppio submit ravvicinato — vedi "Concorrenza prenotazioni").
+3. **Esclusività spot/giorno**. Per un dato `spotId` e `date` può esistere al massimo **1 prenotazione `ACTIVE`**. Garanzia DB-level via partial unique index SQL `WHERE status='ACTIVE'` (vedi commento in `schema.prisma`). Race-safe: P2002 → `ConflictException`.
+4. **Spot deve essere `active=true`**. Solo gli spot con `active=true` sono prenotabili. Quelli `active=false` filtrati a monte da `SpotsService.list()` e `availability()`. Difesa ulteriore in `create()` che rifiuta con `ConflictException("posto non attivo")`.
+5. **Cancellazione solo del proprio**. Solo il proprietario può cancellare la propria prenotazione. `cancel()` ritorna `NotFoundException` (404 deliberato per non leakare l'esistenza dell'ID). Nessun ruolo, nemmeno `ADMIN`, può cancellare prenotazioni altrui.
+6. **Cancellazione idempotente**. `cancel()` su una prenotazione già `CANCELLED` ritorna lo stato senza scrivere su DB. Difesa contro doppi click / refresh.
+7. **Auto-provisioning utente al primo login**. Google OAuth crea il record `User` se non esiste, ruolo `USER` di default. Promosso a `ADMIN` se l'email è in `ADMIN_EMAILS` (env, CSV).
+8. **Tipi posto fissi**. Solo `PARKING` e `DESK`. Aggiungerne uno = migration + UI.
+9. **Stati prenotazione fissi**. `ACTIVE` o `CANCELLED`. Non ci sono stati intermedi (`PENDING`, `CHECKED_IN`, ecc.).
+10. **Granularità giornaliera**. `Reservation.date` è `@db.Date`: si prenota un intero giorno civile, non fasce orarie.
+11. **Formato date API**. Tutti gli endpoint date richiedono `YYYY-MM-DD` (Zod regex). Stringhe non conformi → 400.
+
+---
+
+### Direzione futura
+
+#### (B) Permessi per ruolo
+
+Mappatura ruoli evolvere da binaria a tre livelli:
+
+| Ruolo | Vede | Può prenotare per | Può cancellare per |
+|---|---|---|---|
+| `USER` (oggi default) | Sé | Sé | Sé |
+| `MANAGER` (nuovo) | Sé + i propri riporti | Sé + i propri riporti | Sé + i propri riporti |
+| `ADMIN` / `HR` (oggi promosso da ADMIN_EMAILS) | Tutti | Tutti | Tutti |
+
+Tre dimensioni indipendenti che ne discendono — quando si progetterà andranno mappate una alla volta:
+- **Visibilità**: estendere `GET /reservations` (scoping per ruolo) + nuova pagina dedicata Admin/HR / Manager.
+- **Prenotazione per altri**: estendere `POST /reservations` con `userId` opzionale (controllato dal RolesGuard).
+- **Cancellazione di altri**: rilassare il check `r.userId !== userId` quando il chiamante è MANAGER (sui riporti) o ADMIN (su tutti).
+
+#### (C) Eccezioni e parametri dinamici
+
+Cose che oggi non esistono ma che, per natura, l'amministratore vuole modificare senza redeploy:
+
+- **Giorni bloccati** (festività, chiusure di sede). Per-sede oppure aziendali. Modello: nuova entità `Closure` (o `BlockedDate`) con `(date, siteId?)`. Si rifiuta la prenotazione se la coppia matcha. Vista calendario: pallino grigio "bloccato".
+- **Posti riservati a categorie** (manager, stagisti). Due strade: (a) prenotazioni "pre-caricate" da HR per conto degli interessati (riusa il pattern di prenotazione per altri); (b) annotare `Spot` con un flag/lista di ruoli ammessi (`reservedFor: Role[]`). La (a) è meno invasiva ma sposta l'onere su HR; la (b) è più automatica ma richiede schema più ricco e logica di filtro.
+- **Parametri configurabili** (oggi `MAX_DAYS_AHEAD`, in futuro altri). Da spostare da env a tabella DB se vogliamo console di amministrazione. Trade-off: env = redeploy ad ogni cambio, semplice; DB = console UI, refresh runtime, più infrastruttura. Decisione dipende da quanto spesso i parametri cambiano nella realtà.
+
+#### Pagina Admin / HR / Manager (deriva da B + C)
+
+Una pagina riservata che combina:
+- **Tabella prenotazioni** filtrabile (intervallo date, sede, piano, tipo, utente search, stato). Colonne: Data, Utente, Tipo, Codice posto, Sede, Piano, Zona, Stato, Creata il, Cancellata il (`updatedAt` per i CANCELLED).
+- **Azione cancel** per riga (se permesso dal ruolo).
+- **Azione "prenota per …"** (se permesso dal ruolo).
+- **Sezione config** (eccezioni e parametri di C).
+- **Export** CSV / Excel — verosimilmente in fase 2, dopo che la pagina vede uso reale.
+
+Routing ipotizzato: `/admin` con sottosezioni `/admin/reservations`, `/admin/closures`, `/admin/settings`. Voce nav visibile solo se `me.role !== "USER"`.
+
+---
+
+### Domande aperte (bloccanti per la progettazione)
+
+Sono le risposte da raccogliere **prima** di toccare schema o codice. Senza queste, qualunque scelta sarebbe da rifare.
+
+#### Q1. Provenienza dei ruoli e dei riporti da Entra ID
+
+In produzione l'auth sarà Entra ID. Domande:
+- Il ruolo `MANAGER` / `HR` arriva come **claim** di Entra (group membership / app role assignment) o lo manteniamo lato app?
+- I **diretti riporti** sono interrogabili via Microsoft Graph (`/me/directReports`)? È disponibile per tutti gli utenti del tenant o solo per chi ha permessi specifici?
+- HR vuole davvero amministrare i ruoli da Entra (gruppi/app roles), o preferisce una gestione interna all'app (tabella `User.role`)?
+
+**Proposta operativa**: prima di aggiungere `User.managerId`, gruppi, ruoli o tabelle ad hoc, fare una **spike di 1-2 giorni** con un account Entra di test (anche personale, se possibile) per verificare empiricamente cosa è interrogabile e cosa no. Output dello spike: documento di 2-3 pagine con esempi di payload claim, risposte Graph, vincoli scoperti.
+
+Senza spike rischiamo di costruire un modello dati (`User.managerId`, tabella `Team`, ecc.) che poi scopriamo essere ridondante o non sincronizzabile con Entra.
+
+#### Q2. Granularità per-sede vs aziendale
+
+- Le **festività e chiusure** sono gestite per-sede (Bari ha chiuso il 6/12, Milano lavora) o sono uniformi azienda-wide?
+- I **posti riservati per categoria** (es. stagisti) sono per-sede o cross-sede?
+
+Risposta determina se le entità nuove portano `siteId` opzionale o no.
+
+#### Q3. Dove vivono i parametri configurabili
+
+Per `MAX_DAYS_AHEAD` e simili: env (status quo) vs tabella DB con console.
+
+- **Env**: redeploy a ogni cambio. Ok se cambiano 2 volte l'anno.
+- **DB**: console admin, refresh runtime. Più infrastruttura, ma necessario se cambiano spesso o se diversi parametri sono per-sede.
+
+Per progettare ha senso fare una stima realistica della frequenza di cambio.
+
+#### Q4. Modello permessi: role-based vs attribute-based
+
+- **RBAC** (role-based, semplice): un utente ha un ruolo, il ruolo ha permessi statici. Semplice, copre USER/MANAGER/ADMIN.
+- **ABAC** (attribute-based): permessi calcolati da attributi (sede, ruolo, riporti, ecc.). Più flessibile, più complesso.
+
+Per il caso d'uso attuale (tre ruoli + scoping per riporti) RBAC sembra sufficiente, ma se in futuro spuntano regole tipo "il responsabile di Bari vede solo Bari" si scivola verso ABAC.
+
+---
+
+### Roadmap propedeutica suggerita
+
+Niente codice finché Q1-Q4 non hanno una risposta. Ordine consigliato:
+
+1. **Spike Entra ID** (Q1) — 1-2 giorni. Decide il modello dati di ruoli e riporti.
+2. **Conversazione con HR/Manager** (Q2 + Q3) — capire cadenza realistica di chiusure e cambio parametri.
+3. **Decisione modello permessi** (Q4) — RBAC vs ABAC.
+4. Solo allora: progettazione di schema e API per Pagina Admin (B) e per le eccezioni dinamiche (C).
+5. Implementazione incrementale, partendo dalla pagina di sola visibilità (read-only) e aggiungendo azioni dopo.
+
+- **Priority**: 🟡 MED (non urgente fino al go-live aziendale, ma blocca qualunque feature multi-utente "vera")
+- **Stato**: 🟡 IN ANALISI
