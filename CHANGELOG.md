@@ -2,7 +2,45 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
-## 2026-06-20 — Rifiniture varie: prenota-per-utente, tab colorati, cerchio "oggi"
+## 2026-06-20 — `/my-reservations` come `/admin/reservations`: counts, banner per-tab, calendar↔lista coordinati
+
+Pacchetto di rifiniture che uniforma `/my-reservations` al pattern di `/admin/reservations` (tab gestisce sia calendar che lista con una fetch unica), introduce parametri configurabili e sistema diversi micro-bug emersi nei round di test.
+
+### Backend
+
+- **`listMine` accetta `type`** ([`reservations.service.ts`](apps/api/src/reservations/reservations.service.ts), [`ReservationsRangeQuerySchema`](packages/shared/src/reservation.schema.ts)): la UI ora chiama `/reservations/me?type=PARKING|DESK` una volta per tab. Con questo `MY_LIST_LIMIT` e `truncated` valgono **per-tipo** invece che sull'aggregato (prima 5 PARKING + 5 DESK con LIMIT=8 davano "8 totali, truncated=true mescolato").
+- **Lettura libera nel tempo** in `listMine`: `from`/`to` ora usano `parseDateOnly` (solo formato) invece di `parseDateUtc` (range `[oggi, oggi+MAX_DAYS_AHEAD]`). Distinzione semantica: `MAX_DAYS_AHEAD` vincola le **azioni** (`create`), non la lettura — l'utente può vedere prenotazioni passate (es. storico) e oltre il limite, anche se non può crearne lì.
+- **Limiti list configurabili via env**: nuove costanti `ADMIN_RESERVATIONS_LIST_LIMIT` (default 500) e `MY_RESERVATIONS_LIST_LIMIT` (default 100) in [`shared/reservation.schema.ts`](packages/shared/src/reservation.schema.ts), sovrascrivibili rispettivamente da `process.env.ADMIN_RESERVATIONS_LIST_LIMIT` e `process.env.MY_RESERVATIONS_LIST_LIMIT` via helper `envInt(name, fallback)` (stesso pattern di `MAX_DAYS_AHEAD`). Letti al boot del modulo Nest. I valori shared sono solo default — il `limit` mostrato nel banner arriva sempre dalla response, così il client riflette il valore reale del server.
+- **Sort default DESC** ([`listMine`](apps/api/src/reservations/reservations.service.ts), [`findAdminItems`](apps/api/src/reservations/reservations.service.ts)): la prima riga in alto è la prenotazione di data più alta (più "recente nel tempo"). In combinazione con la troncatura admin: i 500 risultati visibili sono i 500 **più recenti** invece dei 500 più vecchi — più utile in pratica.
+
+### Refactor `/my-reservations` (allineamento al pattern admin)
+
+- **Tab gestisce calendar + lista**: il sotto-componente `ReservationsTab` riceve `view` come prop e renderizza internamente sia `<SpotsCalendar>` (vista calendar) che la `<DataTable>` (vista lista). Una sola fetch per `type+from+to`, alimenta entrambe le viste. La fetch globale del padre è stata rimossa.
+- **Tab counts per-tipo lift up**: il padre `MyReservationsList` tiene `parkingCount`/`deskCount` (`number | null`), valorizzati dai tab via `onCountChange` callback. Label: "Posti auto (3)" / "Scrivanie (3)". Identico al pattern `/admin/reservations`.
+- **Banner "Risultati troncati" per-tab**, sopra la tabella e anche in vista calendar (utile se un mese supera LIMIT). Prima era globale sopra i Tabs, distante dal contenuto a cui si riferiva.
+- **Filtri riordinati come admin** in vista lista (2 righe `auto-fit minmax(260px,1fr)`): riga 1 = Sede + Piano + Zona (label esplicita aggiunta); riga 2 = Da + A. Sostituiti il vecchio DatePicker singolo "Data" + il filtro zona separato.
+- **Modal cancel unificato**: stesso modal apre da click riga (lista) e da click giorno-mio (calendar) — niente più due Modal duplicati nel padre e nel tab.
+
+### Calendar UX
+
+- **Auto-set Da/A al mese visualizzato in vista calendar** (entrambe le pagine): nuova prop `onMonthChange?: (firstOfMonthUtc: Date) => void` su [`SpotsCalendar`](apps/web/src/components/SpotsCalendar.tsx) e [`AdminReservationsCalendar`](apps/web/src/components/AdminReservationsCalendar.tsx). Il tab ascolta solo in `view === "calendar"` e setta `dateFrom = "YYYY-MM-01"`, `dateTo = "YYYY-MM-{lastDay}"`. Vantaggio: in vista calendar `LIMIT` e `truncated` riflettono il **mese**, non l'intero dataset; cambio mese → re-fetch del nuovo mese.
+- **Mese ricordato tra view changes**: nuova prop `initialMonth?: Date` sui calendar. Il padre passa `dateFrom ? dateFromIso(dateFrom) : undefined` — al rimount (passaggio list→calendar→list) il calendar parte dal mese di `dateFrom` corrente, non sempre da oggi. Coerenza con i Da/A che già "ricordavano" lo stato.
+- **Calendar resta sempre montato durante il loading**: il pattern `loading ? <Spinner/> : <Calendar/>` smontava il calendar ad ogni fetch — il `currentMonth` interno si resettava a oggi al rimount. Ora `<InlineLoading>` appare in aggiunta sopra il calendar, senza smontarlo. Bug critico: senza questo fix, cliccare prev/next era impossibile (effetto "ritorno al mese corrente" istantaneo).
+- **`unboundedNavigation` per `SpotsCalendar`** (default `false`): quando `true` (usato in `/my-reservations`) prev/next sono sempre abilitati. La lettura non è vincolata da `MAX_DAYS_AHEAD`. In `/parking` e `/desks` resta bound (non puoi navigare a mesi in cui non puoi prenotare).
+- **DatePicker `/parking` e `/desks` con `maxDate`** ([`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx)): aggiunto `maxDate={maxIso()}` (oggi + `MAX_DAYS_AHEAD`) accanto al `minDate` già esistente. Flatpickr disabilita visivamente le celle fuori range — niente più "clic su data fuori limite → errore backend".
+- **Hover di default sulle celle calendar** ([`globals.scss`](apps/web/src/styles/globals.scss)): aggiunto `:hover { background: #f4f4f4 }` (Carbon gray-10) a `.rsv-calendar-day` base. Risolve il caso in cui le celle senza variante semantica (tipico in `/my-reservations` con `showAvailability=false`) non avevano feedback hover sul wrapper colorato. Le varianti `--available`/`--full`/`--disabled`/`--has-items` mantengono i loro hover specifici (override).
+
+### Mobile / UI
+
+- **Logo Home su mobile** ([`AppShell.tsx`](apps/web/src/components/AppShell.tsx), [`globals.scss`](apps/web/src/styles/globals.scss)): un solo `<HeaderName>` mostra "IBM Reservation" su desktop e l'icona Home (Carbon `Home`) su mobile. Sotto Carbon `$breakpoint-md = 672px`, il prefix Carbon `cds--header__name--prefix` e il testo `rsv-brand-text` vengono nascosti via CSS — resta visibile solo l'SVG, e la `HeaderGlobalBar` di destra recupera lo spazio per il bottone Esci che prima veniva tagliato.
+- **Padding ridotti su mobile**: il `<Content>` Carbon ora ha classe `rsv-app-content` (era `style` inline non responsive). Cascata su mobile (≤671px): `Content` 0 + `<main>` 0.5rem + `.rsv-spot-tab` 0.75rem (era ~5.5rem totali). I DatePicker stretti rientrano nei wrapper colorati senza overflow.
+
+### Bug fix
+
+- **Redirect post-login bypassava la dispatch per ruolo** ([`login/page.tsx`](apps/web/src/app/login/page.tsx)): il bottone forzava `callbackUrl: "/my-reservations"` hardcoded, e admin finivano lì invece che su `/admin/reservations`. Ora `callbackUrl` è letto da query string (`?callbackUrl=...` valorizzato dal middleware withAuth quando rimanda da una pagina protetta) con **fallback `/`** così `page.tsx` può fare la dispatch per ruolo.
+- **Errore di update/cancel ora dentro al modale** ([`AdminReservationsList.tsx`](apps/web/src/components/AdminReservationsList.tsx)): il caso "il nuovo utente ha già una prenotazione per quel giorno" (P2002 → 409) era un'`InlineNotification` sopra la tabella, nascosta dietro l'overlay del modale aperto. Ora è dentro al modale (il modale resta aperto così l'admin corregge la selezione e ritenta). Cambio selezione utente nel ComboBox resetta automaticamente l'errore.
+
+
 
 Rifiniture a valle dei round su /admin/reservations + dettagli UX trasversali a tutta l'app.
 

@@ -104,6 +104,13 @@ function formatDateTime(iso: string | Date): string {
   return DT_FMT.format(typeof iso === "string" ? new Date(iso) : iso);
 }
 
+// Parse "YYYY-MM-DD" → Date UTC. Usato per derivare `initialMonth` del
+// calendar dal `dateFrom` corrente del tab (string ISO).
+function dateFromIso(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
 function isoFromDate(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -120,6 +127,16 @@ export function AdminReservationsList() {
   const [users, setUsers] = useState<AdminUserItem[]>([]);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [usersReloadTick, setUsersReloadTick] = useState(0);
+
+  // Conteggi per-tipo, mostrati nelle label dei tab "Posti auto (N)" /
+  // "Scrivanie (N)". Lift up dal `AdminReservationsTab`: ogni tab ha la
+  // propria fetch e notifica via `onCountChange` quando il proprio
+  // `items.length` cambia. Il numero riflette i filtri server-side
+  // attualmente applicati nel tab (Sede/Piano/Zona/Stato/Da/A/Utenti) —
+  // utile per "vedo quanti risultati ho col filtro corrente". `null` =
+  // ancora non caricato, mostra "—" invece di "0" per non confondere.
+  const [parkingCount, setParkingCount] = useState<number | null>(null);
+  const [deskCount, setDeskCount] = useState<number | null>(null);
 
   useEffect(() => {
     api
@@ -165,8 +182,8 @@ export function AdminReservationsList() {
         onChange={({ selectedIndex: i }) => setSelectedIndex(i)}
       >
         <TabList aria-label="Tipo di prenotazione" contained>
-          <Tab>Posti auto</Tab>
-          <Tab>Scrivanie</Tab>
+          <Tab>{`Posti auto (${parkingCount ?? "—"})`}</Tab>
+          <Tab>{`Scrivanie (${deskCount ?? "—"})`}</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -177,6 +194,7 @@ export function AdminReservationsList() {
               users={users}
               onSwitchToList={() => setView("list")}
               onReloadUsers={reloadUsers}
+              onCountChange={setParkingCount}
             />
           </TabPanel>
           <TabPanel>
@@ -187,6 +205,7 @@ export function AdminReservationsList() {
               users={users}
               onSwitchToList={() => setView("list")}
               onReloadUsers={reloadUsers}
+              onCountChange={setDeskCount}
             />
           </TabPanel>
         </TabPanels>
@@ -204,6 +223,10 @@ interface AdminReservationsTabProps {
   // Refetch della lista utenti (state nel parent). Cliccato dal bottone Renew
   // insieme al refetch delle prenotazioni del tab corrente.
   onReloadUsers: () => void;
+  // Notifica al padre il numero corrente di items (post-filtri server-side).
+  // Usato dal padre per popolare la label del tab "Posti auto (N)" /
+  // "Scrivanie (N)".
+  onCountChange: (count: number) => void;
 }
 
 // Sotto-componente per il contenuto di un tab. Stato dei filtri indipendente
@@ -215,6 +238,7 @@ function AdminReservationsTab({
   users,
   onSwitchToList,
   onReloadUsers,
+  onCountChange,
 }: AdminReservationsTabProps) {
   const [sites, setSites] = useState<Site[]>([]);
   const [floors, setFloors] = useState<Floor[]>([]);
@@ -370,6 +394,13 @@ function AdminReservationsTab({
     reloadTick,
   ]);
 
+  // Propaga il count corrente al padre per le label dei tab "Posti auto (N)"
+  // / "Scrivanie (N)". Effect separato così non rinnoviamo il fetch principale
+  // ad ogni cambio di reference di `onCountChange`.
+  useEffect(() => {
+    onCountChange(items.length);
+  }, [items, onCountChange]);
+
   const rows = useMemo(() => {
     return items.map((r) => ({
       id: r.id,
@@ -464,6 +495,22 @@ function AdminReservationsTab({
     setDateFrom(iso);
     setDateTo(iso);
     onSwitchToList();
+  }
+
+  // Auto-set Da/A al mese visualizzato dal calendar. Chiamato dal calendar
+  // al mount e ad ogni navigazione prev/next. Solo in view === "calendar":
+  // in vista lista i Da/A sono user-controlled e non vogliamo che il
+  // calendar (smontato) interferisca. Inoltre il calendar viene rimontato
+  // ad ogni passaggio calendar→list→calendar — ricomincia da oggi e
+  // ri-imposta Da/A automaticamente.
+  function handleCalendarMonthChange(firstOfMonth: Date) {
+    if (view !== "calendar") return;
+    const y = firstOfMonth.getUTCFullYear();
+    const m = firstOfMonth.getUTCMonth();
+    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const mm = String(m + 1).padStart(2, "0");
+    setDateFrom(`${y}-${mm}-01`);
+    setDateTo(`${y}-${mm}-${String(lastDay).padStart(2, "0")}`);
   }
 
   // Decide quale azione partire dal bottone primary del modal: aggiorna
@@ -719,7 +766,12 @@ function AdminReservationsTab({
         />
       )}
 
-      {truncated && view === "list" && (
+      {/* Banner truncated visibile in entrambe le viste: in calendar significa
+          "questo mese ha più di LIMIT prenotazioni col filtro corrente",
+          quindi count e overlay del calendar sono incompleti — caso raro
+          ma rilevante quando capita. Il messaggio è generico ("restringi
+          i filtri") perché Da/A sono già auto-impostati al mese. */}
+      {truncated && (
         <InlineNotification
           kind="warning"
           title="Risultati troncati"
@@ -731,15 +783,25 @@ function AdminReservationsTab({
       )}
 
       {view === "calendar" ? (
-        loading ? (
-          <InlineLoading description="Carico le prenotazioni…" />
-        ) : (
+        // Il calendar resta SEMPRE montato durante il loading: il suo state
+        // interno (`currentMonth`) si perderebbe al rimount, ricominciando da
+        // oggi e ignorando la navigazione prev/next. Lo `<InlineLoading>`
+        // appare in aggiunta sopra il calendar senza smontarlo. Items/count
+        // mostrati durante il loading sono quelli del fetch precedente —
+        // accettabile come stale data, sparisce in <1s al completamento.
+        <>
+          {loading && <InlineLoading description="Carico le prenotazioni…" />}
           <AdminReservationsCalendar
             items={items}
             totalCapacity={totalCapacity}
             onDayClick={handleDayClick}
+            onMonthChange={handleCalendarMonthChange}
+            // Riallinea il calendar al mese di `dateFrom` corrente al rimount
+            // (passaggio list→calendar). Senza, il calendar tornerebbe sempre
+            // al mese corrente perdendo il contesto temporale.
+            initialMonth={dateFrom ? dateFromIso(dateFrom) : undefined}
           />
-        )
+        </>
       ) : loading ? (
         <InlineLoading description="Carico le prenotazioni…" />
       ) : rows.length === 0 ? (

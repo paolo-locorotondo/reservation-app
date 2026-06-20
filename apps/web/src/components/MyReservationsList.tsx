@@ -61,6 +61,13 @@ function nextSort(prev: SortState, key: string): SortState {
   return null;
 }
 
+// Parse "YYYY-MM-DD" → Date UTC al giorno corrispondente. Usato per derivare
+// `initialMonth` del calendar dal `dateFrom` corrente del tab (string ISO).
+function dateFromIso(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
 function isoFromDate(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -78,120 +85,29 @@ function formatDate(iso: string | Date): string {
 
 export function MyReservationsList() {
   const router = useRouter();
-  const [items, setItems] = useState<MyReservation[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
-  // Carbon Tabs di default è uncontrolled: se smontiamo durante un reload,
-  // al rimontaggio torna al primo tab. Lo rendiamo controllato e teniamo
-  // Tabs sempre montato durante i reload (vedi `isInitialLoad` sotto).
+  // Carbon Tabs di default è uncontrolled: lo rendiamo controllato perché
+  // `selectedIndex` lo usiamo anche per il bottone "Prenota qui ..." sotto
+  // l'h1 (label dipende dal tab attivo).
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
-  // Toggle Vista a livello pagina (condiviso tra i due tab). Default
-  // Calendario, coerente con /parking e /desks: la panoramica mensile è il
-  // punto di partenza naturale. In Calendario mostriamo SpotsCalendar con
-  // `showAvailability=false`: solo bordo blu sui giorni con propria
-  // prenotazione, click → naviga a /parking|/desks preimpostando la data come
-  // query string.
+  // Toggle vista pagina-livello (condiviso tra i due tab). Default Calendario,
+  // coerente con /parking e /desks. Ogni `ReservationsTab` riceve `view` come
+  // prop e decide internamente cosa renderizzare (calendar o lista) — stesso
+  // pattern di `AdminReservationsList`.
   const [view, setView] = useState<"list" | "calendar">("calendar");
-  // Modal di cancellazione attivata dal click su un giorno-mio nel calendario
-  // della vista /my-reservations (la vista lista ha il suo modal in
-  // ReservationsTab; lì il click è sulla riga della tabella).
-  const [calendarCancelTarget, setCalendarCancelTarget] = useState<MyReservation | null>(
-    null,
-  );
-  const [calendarCancelling, setCalendarCancelling] = useState(false);
-
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    api
-      .listMyReservations()
-      .then(setItems)
-      .catch((e: ApiError) => setError(`Caricamento prenotazioni: ${e.message}`))
-      .finally(() => {
-        setLoading(false);
-        setHasLoadedOnce(true);
-      });
-  }, [reloadTick]);
-
-  const parkingItems = useMemo(
-    () => items.filter((r) => r.spot.type === "PARKING"),
-    [items],
-  );
-  const deskItems = useMemo(
-    () => items.filter((r) => r.spot.type === "DESK"),
-    [items],
-  );
-
-  // Date YYYY-MM-DD delle proprie prenotazioni: usate dal calendario per
-  // disegnare il bordo blu sui giorni "miei". `r.date` è un ISO datetime
-  // (es. 2026-06-09T00:00:00.000Z), prendiamo i primi 10 char.
-  const parkingDates = useMemo(
-    () => new Set(parkingItems.map((r) => String(r.date).slice(0, 10))),
-    [parkingItems],
-  );
-  const deskDates = useMemo(
-    () => new Set(deskItems.map((r) => String(r.date).slice(0, 10))),
-    [deskItems],
-  );
-
-  // Etichetta "sede · codice" mostrata dentro la cella del calendario per i
-  // giorni-mio (solo in /my-reservations, dove la calendar gira con
-  // showAvailability=false). Es: "Bari · P-01". Se mai esistessero più
-  // prenotazioni stesso utente / stesso giorno / stesso tipo, vince l'ultima
-  // (caso impedito DB-level dal partial unique index, quindi non succede).
-  const parkingLabels = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const r of parkingItems) {
-      m.set(String(r.date).slice(0, 10), `${r.spot.floor.site.name} · ${r.spot.code}`);
-    }
-    return m;
-  }, [parkingItems]);
-  const deskLabels = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const r of deskItems) {
-      m.set(String(r.date).slice(0, 10), `${r.spot.floor.site.name} · ${r.spot.code}`);
-    }
-    return m;
-  }, [deskItems]);
+  // Conteggi per-tipo, mostrati nelle label dei tab "Posti auto (N)" /
+  // "Scrivanie (N)". Lift up dai `ReservationsTab`: ogni tab ha la propria
+  // fetch e notifica via `onCountChange`. Il numero riflette i filtri server
+  // attualmente applicati nel tab (Da/A) — in vista calendar coincide col
+  // numero di prenotazioni del mese visualizzato. `null` = ancora non
+  // caricato → mostra "—".
+  const [parkingCount, setParkingCount] = useState<number | null>(null);
+  const [deskCount, setDeskCount] = useState<number | null>(null);
 
   function handleCancelled(msg: string) {
     setSuccessMsg(msg);
     setReloadTick((t) => t + 1);
-  }
-
-  // Click su giorno del calendario: se l'utente ha una prenotazione attiva del
-  // tab corrente in quel giorno → apre il modal di cancellazione; altrimenti
-  // naviga a /parking|/desks con la data preimpostata. Replica il pattern
-  // "click row → cancella" della vista Lista applicato al calendario.
-  function handleCalendarDayClick(type: SpotType, iso: string) {
-    const pool = type === "PARKING" ? parkingItems : deskItems;
-    const own = pool.find((r) => String(r.date).slice(0, 10) === iso);
-    if (own) {
-      setCalendarCancelTarget(own);
-    } else {
-      const path = type === "PARKING" ? "/parking" : "/desks";
-      router.push(`${path}?date=${iso}`);
-    }
-  }
-
-  async function confirmCalendarCancel() {
-    if (!calendarCancelTarget) return;
-    setCalendarCancelling(true);
-    try {
-      await api.cancelReservation(calendarCancelTarget.id);
-      handleCancelled(
-        `Prenotazione del ${formatDate(calendarCancelTarget.date)} (${calendarCancelTarget.spot.code}) cancellata.`,
-      );
-      setCalendarCancelTarget(null);
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "Errore imprevisto";
-      setError(`Cancellazione fallita: ${msg}`);
-    } finally {
-      setCalendarCancelling(false);
-    }
   }
 
   // Subtitle dinamico: la calendar view ha logica diversa dal list view (click
@@ -208,13 +124,12 @@ export function MyReservationsList() {
         <div>
           <h1 style={{ marginBottom: "0.25rem" }}>Le mie prenotazioni</h1>
           <p style={{ marginBottom: 0, color: "#525252" }}>{subtitle}</p>
-          {/* Scorciatoia "Prenota qui ..." visibile solo in vista Lista quando
-              ci sono già prenotazioni (le Tabs sono montate, quindi
-              `selectedIndex` riflette davvero il tab visibile). Quando l'utente
-              non ha ancora prenotazioni mostriamo entrambi i link sotto, vicino
-              alla frase "Non hai prenotazioni attive.". In Calendario il click
-              sui giorni copre già il flusso prenotazione. */}
-          {view === "list" && items.length > 0 && (
+          {/* Scorciatoia "Prenota qui ..." per la vista Lista, sempre visibile
+              (anche con tab vuoto): se l'utente non ha ancora prenotazioni di
+              questo tipo, è proprio il bottone che gli serve. Label dipende
+              dal tab attivo. In Calendario il click sui giorni copre già il
+              flusso prenotazione, quindi non lo mostriamo. */}
+          {view === "list" && (
             <Button
               kind="ghost"
               size="sm"
@@ -240,16 +155,6 @@ export function MyReservationsList() {
         </ContentSwitcher>
       </div>
 
-      {error && (
-        <InlineNotification
-          kind="error"
-          title="Errore"
-          subtitle={error}
-          onCloseButtonClick={() => setError(null)}
-          style={{ marginBottom: "1rem" }}
-        />
-      )}
-
       {successMsg && (
         <InlineNotification
           kind="success"
@@ -260,142 +165,39 @@ export function MyReservationsList() {
         />
       )}
 
-      {loading && !hasLoadedOnce ? (
-        <InlineLoading description="Carico le prenotazioni…" />
-      ) : items.length === 0 ? (
-        // Senza prenotazioni le Tabs non si montano: l'utente non può scegliere
-        // tra "Posti auto" / "Scrivanie" via UI, quindi mostriamo entrambi i
-        // link inline per offrirgli direttamente la scelta del flusso.
-        <div>
-          <p style={{ color: "#525252", marginBottom: "0.75rem" }}>
-            Non hai prenotazioni attive.
-          </p>
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            <Button
-              kind="ghost"
-              size="sm"
-              style={{ paddingLeft: 0 }}
-              onClick={() => router.push("/parking")}
-            >
-              Prenota qui i posti auto
-            </Button>
-            <Button
-              kind="ghost"
-              size="sm"
-              style={{ paddingLeft: 0 }}
-              onClick={() => router.push("/desks")}
-            >
-              Prenota qui la tua scrivania
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <Tabs
-          selectedIndex={selectedIndex}
-          onChange={({ selectedIndex: i }) => setSelectedIndex(i)}
-        >
-          <TabList aria-label="Tipo di prenotazione" contained>
-            <Tab>{`Posti auto (${parkingItems.length})`}</Tab>
-            <Tab>{`Scrivanie (${deskItems.length})`}</Tab>
-          </TabList>
-          <TabPanels>
-            <TabPanel>
-              {view === "list" ? (
-                <ReservationsTab
-                  tabKey="PARKING"
-                  type="PARKING"
-                  items={parkingItems}
-                  onCancelled={handleCancelled}
-                  onError={(m) => setError(m)}
-                  onReload={() => setReloadTick((t) => t + 1)}
-                  loading={loading}
-                />
-              ) : (
-                // showAvailability=false: niente pallini di disponibilità (in
-                // /my-reservations sarebbero rumore). Bordo blu sui giorni
-                // della propria lista; click su un giorno-mio apre il modal di
-                // cancel, click su un giorno qualunque naviga a /parking per
-                // prenotare un nuovo posto.
-                <SpotsCalendar
-                  type="PARKING"
-                  siteId=""
-                  floorId=""
-                  myReservedDates={parkingDates}
-                  myReservationLabels={parkingLabels}
-                  onDayClick={(iso) => handleCalendarDayClick("PARKING", iso)}
-                  showAvailability={false}
-                />
-              )}
-            </TabPanel>
-            <TabPanel>
-              {view === "list" ? (
-                <ReservationsTab
-                  tabKey="DESK"
-                  type="DESK"
-                  items={deskItems}
-                  onCancelled={handleCancelled}
-                  onError={(m) => setError(m)}
-                  onReload={() => setReloadTick((t) => t + 1)}
-                  loading={loading}
-                />
-              ) : (
-                <SpotsCalendar
-                  type="DESK"
-                  siteId=""
-                  floorId=""
-                  myReservedDates={deskDates}
-                  myReservationLabels={deskLabels}
-                  onDayClick={(iso) => handleCalendarDayClick("DESK", iso)}
-                  showAvailability={false}
-                />
-              )}
-            </TabPanel>
-          </TabPanels>
-        </Tabs>
-      )}
-
-      {/* Modal di cancellazione attivata dal calendario. Il modal della vista
-          Lista vive dentro ReservationsTab (un modal per tab). Qui basta uno
-          condiviso perché il calendario è una sola istanza per pagina. */}
-      <Modal
-        open={calendarCancelTarget !== null}
-        danger
-        modalHeading="Cancellare la prenotazione?"
-        primaryButtonText={calendarCancelling ? "Cancellazione…" : "Cancella"}
-        secondaryButtonText="Annulla"
-        primaryButtonDisabled={calendarCancelling}
-        onRequestClose={() => {
-          if (!calendarCancelling) setCalendarCancelTarget(null);
-        }}
-        onRequestSubmit={confirmCalendarCancel}
+      <Tabs
+        selectedIndex={selectedIndex}
+        onChange={({ selectedIndex: i }) => setSelectedIndex(i)}
       >
-        {calendarCancelTarget && (
-          <>
-            <p>
-              Stai per cancellare la prenotazione{" "}
-              {calendarCancelTarget.spot.type === "PARKING"
-                ? "del posto auto"
-                : "della scrivania"}{" "}
-              <strong>{calendarCancelTarget.spot.code}</strong> per il{" "}
-              <strong>{formatDate(calendarCancelTarget.date)}</strong>.
-            </p>
-            <ul style={{ margin: "0.75rem 0", paddingLeft: "1.25rem" }}>
-              <li>
-                Sede: <strong>{calendarCancelTarget.spot.floor.site.name}</strong>
-              </li>
-              <li>
-                Piano: <strong>{calendarCancelTarget.spot.floor.name}</strong>
-              </li>
-              {calendarCancelTarget.spot.zone && (
-                <li>
-                  Zona: <strong>{calendarCancelTarget.spot.zone.name}</strong>
-                </li>
-              )}
-            </ul>
-            <p>L&apos;operazione è immediata.</p>
-          </>
-        )}
-      </Modal>
+        <TabList aria-label="Tipo di prenotazione" contained>
+          <Tab>{`Posti auto (${parkingCount ?? "—"})`}</Tab>
+          <Tab>{`Scrivanie (${deskCount ?? "—"})`}</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <ReservationsTab
+              tabKey="PARKING"
+              type="PARKING"
+              view={view}
+              onCancelled={handleCancelled}
+              onReload={() => setReloadTick((t) => t + 1)}
+              reloadTick={reloadTick}
+              onCountChange={setParkingCount}
+            />
+          </TabPanel>
+          <TabPanel>
+            <ReservationsTab
+              tabKey="DESK"
+              type="DESK"
+              view={view}
+              onCancelled={handleCancelled}
+              onReload={() => setReloadTick((t) => t + 1)}
+              reloadTick={reloadTick}
+              onCountChange={setDeskCount}
+            />
+          </TabPanel>
+        </TabPanels>
+      </Tabs>
     </main>
   );
 }
@@ -403,28 +205,55 @@ export function MyReservationsList() {
 interface ReservationsTabProps {
   tabKey: string;
   type: SpotType;
-  items: MyReservation[];
+  // Vista pagina-livello (toggle nel padre). Il tab gestisce sia "list" che
+  // "calendar" internamente, simmetrico al pattern AdminReservationsTab.
+  view: "list" | "calendar";
   onCancelled: (msg: string) => void;
-  onError: (msg: string) => void;
+  // Increment counter dal padre: quando cambia (cancellazione dal calendario,
+  // o future altre azioni globali) il tab rifà la propria fetch — incluso
+  // nella dep array dell'effect.
   onReload: () => void;
-  loading: boolean;
+  reloadTick: number;
+  // Notifica al padre il numero corrente di items, per la label dei tab
+  // "Posti auto (N)" / "Scrivanie (N)".
+  onCountChange: (count: number) => void;
 }
 
-// Sotto-componente per il contenuto di un tab. Ogni istanza ha il proprio
-// stato dei filtri (siteId/floorId/dateFilter/colFilters/sort), così PARKING e
-// DESK sono indipendenti come da spec.
+// Sotto-componente per il contenuto di un tab. Gestisce sia la vista lista
+// che il calendar internamente, con una sola fetch per type+Da+A. In vista
+// calendar Da/A vengono settati automaticamente al mese visualizzato dal
+// SpotsCalendar (handleCalendarMonthChange), così LIMIT e truncated sono
+// per-mese — pattern simmetrico ad AdminReservationsTab.
 function ReservationsTab({
   tabKey,
   type,
-  items,
+  view,
   onCancelled,
-  onError,
   onReload,
-  loading,
+  reloadTick,
+  onCountChange,
 }: ReservationsTabProps) {
+  const router = useRouter();
+  // Fetch state (per-tab, simmetrico ad AdminReservationsTab):
+  // items + flag truncated + limit + loading + error tutti interni.
+  const [items, setItems] = useState<MyReservation[]>([]);
+  const [truncated, setTruncated] = useState(false);
+  const [limit, setLimit] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Filtri per la query backend (date range Da/A — stesso pattern admin).
+  // Restringono il dataset a livello server: il limit MY_LIST_LIMIT viene
+  // applicato DOPO il filtro, quindi truncated è meaningful in relazione
+  // ai filtri attuali.
+  const [dateFrom, setDateFrom] = useState<string | null>(null);
+  const [dateTo, setDateTo] = useState<string | null>(null);
+
+  // Filtri client-side aggiuntivi (sopra il dataset già fetched). Sede/Piano
+  // sono derivati dai dati ricevuti — non ha senso offrire opzioni di cui
+  // non ci sono prenotazioni.
   const [siteFilter, setSiteFilter] = useState<string>("");
   const [floorFilter, setFloorFilter] = useState<string>("");
-  const [dateFilter, setDateFilter] = useState<string | null>(null);
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
   const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>(null);
@@ -438,6 +267,93 @@ function ReservationsTab({
     const lang = navigator.language?.toLowerCase() ?? "";
     if (lang.startsWith("it")) setDatePickerLocale(Italian);
   }, []);
+
+  // Fetch principale: cleanup guard `cancelled` per evitare race tra effect
+  // sovrapposti (es. l'utente cambia rapidamente Da/A). Si re-runna anche al
+  // cambio di `reloadTick` propagato dal padre (cancellazione da calendario).
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    let cancelled = false;
+    api
+      .listMyReservations({
+        type,
+        from: dateFrom ?? undefined,
+        to: dateTo ?? undefined,
+      })
+      .then((res) => {
+        if (cancelled) return;
+        setItems(res.items);
+        setTruncated(res.truncated);
+        setLimit(res.limit);
+      })
+      .catch((e: ApiError) => {
+        if (cancelled) return;
+        setError(`Caricamento prenotazioni: ${e.message}`);
+        setItems([]);
+        setTruncated(false);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [type, dateFrom, dateTo, reloadTick]);
+
+  // Notifica il count corrente al padre per la label del tab.
+  useEffect(() => {
+    onCountChange(items.length);
+  }, [items, onCountChange]);
+
+  // Auto-set Da/A al mese visualizzato dal SpotsCalendar — solo in vista
+  // calendar. In vista lista i Da/A sono user-controlled. Quando l'utente
+  // passa list→calendar→list, i Da/A restano l'ultimo mese visto in
+  // calendar (così la lista è già pre-filtrata sullo stesso periodo).
+  //
+  // Niente clamp al range MAX_DAYS_AHEAD: la lettura delle proprie
+  // prenotazioni non è limitata temporalmente (vedi `listMine` backend, che
+  // usa parseDateOnly per from/to). MAX_DAYS_AHEAD vale solo per le AZIONI
+  // (creazione di nuove prenotazioni) — il calendar mostra freely.
+  function handleCalendarMonthChange(firstOfMonth: Date) {
+    if (view !== "calendar") return;
+    const y = firstOfMonth.getUTCFullYear();
+    const m = firstOfMonth.getUTCMonth();
+    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const mm = String(m + 1).padStart(2, "0");
+    setDateFrom(`${y}-${mm}-01`);
+    setDateTo(`${y}-${mm}-${String(lastDay).padStart(2, "0")}`);
+  }
+
+  // Click su giorno del calendar: se l'utente ha una prenotazione in quel
+  // giorno apre il modal di cancel; altrimenti naviga a /parking|/desks per
+  // prenotare un nuovo posto. Stesso pattern del vecchio
+  // handleCalendarDayClick spostato dal padre.
+  function handleCalendarDayClick(iso: string) {
+    const own = items.find((r) => String(r.date).slice(0, 10) === iso);
+    if (own) {
+      setCancelTarget(own);
+    } else {
+      const path = type === "PARKING" ? "/parking" : "/desks";
+      router.push(`${path}?date=${iso}`);
+    }
+  }
+
+  // Overlay "giorni-mio" + label "sede · codice" per il SpotsCalendar.
+  // Derivati dagli items del tab — il calendar mostra solo le prenotazioni
+  // del proprio tipo, già filtrate per il mese tramite Da/A.
+  const myReservedDates = useMemo(
+    () => new Set(items.map((r) => String(r.date).slice(0, 10))),
+    [items],
+  );
+  const myReservationLabels = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of items) {
+      m.set(String(r.date).slice(0, 10), `${r.spot.floor.site.name} · ${r.spot.code}`);
+    }
+    return m;
+  }, [items]);
 
   // Derivare sedi/piani dalle prenotazioni dell'utente: ha senso solo offrire
   // come filtro le opzioni di cui esistono prenotazioni.
@@ -463,10 +379,11 @@ function ReservationsTab({
     if (!floors.some((f) => f.id === floorFilter)) setFloorFilter("");
   }, [floors, floorFilter]);
 
+  // Le date sono già filtrate server-side via dateFrom/dateTo nella query;
+  // qui restano solo i filtri client (sede/piano).
   const filtered = items.filter((r) => {
     if (siteFilter && r.spot.floor.site.id !== siteFilter) return false;
     if (floorFilter && r.spot.floor.id !== floorFilter) return false;
-    if (dateFilter && formatDate(r.date) !== dateFilter) return false;
     return true;
   });
 
@@ -508,7 +425,7 @@ function ReservationsTab({
       setCancelTarget(null);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Errore imprevisto";
-      onError(`Cancellazione fallita: ${msg}`);
+      setError(`Cancellazione fallita: ${msg}`);
     } finally {
       setCancelling(false);
     }
@@ -518,78 +435,168 @@ function ReservationsTab({
 
   const siteName = sites.find((s) => s.id === siteFilter)?.name;
   const floorName = floors.find((f) => f.id === floorFilter)?.name;
-  const filtersSummary = `Sede: ${siteName ?? "Tutte"} · Piano: ${floorName ?? "Tutti"} · Data: ${dateFilter ?? "Tutte"}`;
+  const filtersSummary = (() => {
+    const parts = [
+      `Sede: ${siteName ?? "Tutte"}`,
+      `Piano: ${floorName ?? "Tutti"}`,
+    ];
+    if (dateFrom) parts.push(`Da: ${dateFrom}`);
+    if (dateTo) parts.push(`A: ${dateTo}`);
+    return parts.join(" · ");
+  })();
   const filtersActiveCount =
     (siteFilter ? 1 : 0) +
     (floorFilter ? 1 : 0) +
-    (dateFilter ? 1 : 0) +
+    (dateFrom ? 1 : 0) +
+    (dateTo ? 1 : 0) +
     Object.values(colFilters).filter((v) => v && v.length > 0).length;
 
   return (
     <div className={`rsv-spot-tab rsv-spot-tab--${type.toLowerCase()}`}>
-      <FiltersPanel summary={filtersSummary} activeCount={filtersActiveCount}>
-        <div className="rsv-filter-grid">
-          <Select
-            id={`site-filter-${tabKey}`}
-            labelText="Sede"
-            value={siteFilter}
-            onChange={(e) => setSiteFilter(e.target.value)}
-          >
-            <SelectItem value="" text="Tutte le sedi" />
-            {sites.map((s) => (
-              <SelectItem key={s.id} value={s.id} text={s.name} />
-            ))}
-          </Select>
-          <Select
-            id={`floor-filter-${tabKey}`}
-            labelText="Piano"
-            value={floorFilter}
-            onChange={(e) => setFloorFilter(e.target.value)}
-          >
-            <SelectItem value="" text="Tutti i piani" />
-            {floors.map((f) => (
-              <SelectItem key={f.id} value={f.id} text={f.name} />
-            ))}
-          </Select>
-          <DatePicker
-            datePickerType="single"
-            dateFormat="Y-m-d"
-            locale={datePickerLocale}
-            value={dateFilter ?? ""}
-            onChange={(dates: Date[]) => {
-              setDateFilter(dates[0] ? isoFromDate(dates[0]) : null);
-            }}
-          >
-            <DatePickerInput
-              id={`date-filter-${tabKey}`}
-              labelText="Data"
-              placeholder="YYYY-MM-DD"
+      {/* Vista calendar: SpotsCalendar mostra il mese corrente, click su un
+          giorno-mio apre modal cancel, click su un giorno qualunque naviga a
+          /parking|/desks per prenotare. Il banner truncated/error sopra il
+          calendar è renderizzato sotto la fine del view branch. */}
+      {view === "calendar" ? (
+        <>
+          {error && (
+            <InlineNotification
+              kind="error"
+              title="Errore"
+              subtitle={error}
+              onCloseButtonClick={() => setError(null)}
+              style={{ marginBottom: "1rem" }}
             />
-          </DatePicker>
-        </div>
-
-        <div className="rsv-secondary-filter">
-          <Search
-            id={`zone-filter-${tabKey}`}
-            labelText="Filtra per zona"
-            placeholder="Cerca zona…"
-            size="md"
-            value={colFilters.zone ?? ""}
-            onChange={(e) =>
-              setColFilters((prev) => ({ ...prev, zone: e.target.value }))
-            }
-            onClear={() =>
-              setColFilters((prev) => {
-                const { zone: _, ...rest } = prev;
-                return rest;
-              })
-            }
+          )}
+          {truncated && (
+            <InlineNotification
+              kind="warning"
+              title="Risultati troncati"
+              subtitle={`Sono visibili solo le prime ${limit} prenotazioni. Restringi i filtri per vederne altre.`}
+              hideCloseButton
+              lowContrast
+              style={{ marginBottom: "1rem" }}
+            />
+          )}
+          {/* Calendar SEMPRE montato durante il loading: il suo state interno
+              `currentMonth` si perderebbe al rimount, ricominciando da oggi
+              ad ogni cambio mese (perché il fetch innescato da prev/next
+              triggera loading=true → smonta calendar → re-mount → reset).
+              `<InlineLoading>` appare in aggiunta senza smontarlo. */}
+          {loading && <InlineLoading description="Carico le prenotazioni…" />}
+          <SpotsCalendar
+            type={type}
+            siteId=""
+            floorId=""
+            myReservedDates={myReservedDates}
+            myReservationLabels={myReservationLabels}
+            onDayClick={handleCalendarDayClick}
+            showAvailability={false}
+            onMonthChange={handleCalendarMonthChange}
+            unboundedNavigation
+            // Riallinea il calendar al mese di Da/A correnti (settati l'ultima
+            // volta dal calendar stesso o dall'utente in vista lista). Letto
+            // solo al mount → effetto al ritorno list→calendar.
+            initialMonth={dateFrom ? dateFromIso(dateFrom) : undefined}
           />
+        </>
+      ) : (
+        <>
+      <FiltersPanel summary={filtersSummary} activeCount={filtersActiveCount}>
+        {/* Stesso layout 2-righe di /admin/reservations:
+            riga 1 = filtri spaziali (Sede + Piano + Zona),
+            riga 2 = range temporale (Da + A). Le righe usano `auto-fit +
+            minmax(260px,1fr)`, quindi su schermi stretti i campi vanno a
+            capo dentro la propria riga senza confondersi con quelli di
+            altre righe. */}
+        <div className="rsv-filters-stack">
+          <div className="rsv-filter-row">
+            <Select
+              id={`site-filter-${tabKey}`}
+              labelText="Sede"
+              value={siteFilter}
+              onChange={(e) => setSiteFilter(e.target.value)}
+            >
+              <SelectItem value="" text="Tutte le sedi" />
+              {sites.map((s) => (
+                <SelectItem key={s.id} value={s.id} text={s.name} />
+              ))}
+            </Select>
+            <Select
+              id={`floor-filter-${tabKey}`}
+              labelText="Piano"
+              value={floorFilter}
+              onChange={(e) => setFloorFilter(e.target.value)}
+            >
+              <SelectItem value="" text="Tutti i piani" />
+              {floors.map((f) => (
+                <SelectItem key={f.id} value={f.id} text={f.name} />
+              ))}
+            </Select>
+            {/* Carbon `Search` non mostra `labelText` visivamente (a11y only):
+                wrappiamo con una <label> Carbon-styled per uniformare la
+                cella alle Select adiacenti — vedi `/admin/reservations`. */}
+            <div>
+              <label htmlFor={`zone-filter-${tabKey}`} className="cds--label">
+                Zona
+              </label>
+              <Search
+                id={`zone-filter-${tabKey}`}
+                labelText="Zona"
+                placeholder="Cerca zona…"
+                size="md"
+                value={colFilters.zone ?? ""}
+                onChange={(e) =>
+                  setColFilters((prev) => ({ ...prev, zone: e.target.value }))
+                }
+                onClear={() =>
+                  setColFilters((prev) => {
+                    const { zone: _, ...rest } = prev;
+                    return rest;
+                  })
+                }
+              />
+            </div>
+          </div>
+
+          <div className="rsv-filter-row">
+            <DatePicker
+              datePickerType="single"
+              dateFormat="Y-m-d"
+              locale={datePickerLocale}
+              value={dateFrom ?? ""}
+              onChange={(dates: Date[]) => {
+                setDateFrom(dates[0] ? isoFromDate(dates[0]) : null);
+              }}
+            >
+              <DatePickerInput
+                id={`date-from-${tabKey}`}
+                labelText="Da"
+                placeholder="YYYY-MM-DD"
+              />
+            </DatePicker>
+            <DatePicker
+              datePickerType="single"
+              dateFormat="Y-m-d"
+              locale={datePickerLocale}
+              value={dateTo ?? ""}
+              onChange={(dates: Date[]) => {
+                setDateTo(dates[0] ? isoFromDate(dates[0]) : null);
+              }}
+            >
+              <DatePickerInput
+                id={`date-to-${tabKey}`}
+                labelText="A"
+                placeholder="YYYY-MM-DD"
+              />
+            </DatePicker>
+          </div>
         </div>
 
         {(siteFilter ||
           floorFilter ||
-          dateFilter ||
+          dateFrom ||
+          dateTo ||
           Object.values(colFilters).some((v) => v && v.length > 0)) && (
           <Button
             kind="ghost"
@@ -597,7 +604,8 @@ function ReservationsTab({
             onClick={() => {
               setSiteFilter("");
               setFloorFilter("");
-              setDateFilter(null);
+              setDateFrom(null);
+              setDateTo(null);
               setColFilters({});
               setOpenFilter(null);
             }}
@@ -619,6 +627,27 @@ function ReservationsTab({
           <Renew />
         </IconButton>
       </div>
+
+      {error && (
+        <InlineNotification
+          kind="error"
+          title="Errore"
+          subtitle={error}
+          onCloseButtonClick={() => setError(null)}
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      {truncated && (
+        <InlineNotification
+          kind="warning"
+          title="Risultati troncati"
+          subtitle={`Sono visibili solo le prime ${limit} prenotazioni. Restringi i filtri per vederne altre.`}
+          hideCloseButton
+          lowContrast
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
 
       {items.length > 0 && filteredRows.length === 0 && (
         <InlineNotification
@@ -762,6 +791,8 @@ function ReservationsTab({
             </TableContainer>
           )}
         </DataTable>
+      )}
+        </>
       )}
 
       <Modal

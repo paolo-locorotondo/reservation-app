@@ -22,7 +22,7 @@ import {
   SkipToContent,
   Content,
 } from "@carbon/react";
-import { UserAvatar, Car, Devices, Calendar, Group } from "@carbon/icons-react";
+import { UserAvatar, Car, Devices, Calendar, Group, Home } from "@carbon/icons-react";
 import type { ComponentType, ReactNode } from "react";
 
 // Le icone vengono usate solo nella variante mobile dell'header (dove la nav
@@ -94,8 +94,15 @@ export function AppShell({ children }: { children: ReactNode }) {
               isActive={isSideNavExpanded}
               aria-expanded={isSideNavExpanded}
             />
-            <HeaderName href="/" prefix="IBM">
-              Reservation
+            {/* Branding adattivo: stesso `<HeaderName>` su tutte le larghezze.
+                Su desktop si vede "IBM Reservation"; sotto Carbon $breakpoint-md
+                (672px) il testo + il prefix Carbon vengono nascosti via CSS e
+                resta visibile solo l'icona Home, così la HeaderGlobalBar di
+                destra recupera lo spazio per Esci. Vedi `.rsv-brand` in
+                globals.scss. */}
+            <HeaderName href="/" prefix="IBM" className="rsv-brand">
+              <span className="rsv-brand-text">Reservation</span>
+              <Home size={20} className="rsv-brand-home" aria-label="Home" />
             </HeaderName>
             <HeaderNavigation aria-label="Sezioni">
               {visibleNav.map((item) => (
@@ -193,7 +200,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Header>
         )}
       />
-      <Content style={{ padding: "2rem", marginTop: "3rem" }}>{children}</Content>
+      {/* Padding gestito via classe (non inline) per poter rispondere a media
+          query: su mobile riduciamo il padding del Content per dare più
+          larghezza orizzontale ai filtri/datepicker — vedi globals.scss. */}
+      <Content className="rsv-app-content">{children}</Content>
     </>
   );
 }

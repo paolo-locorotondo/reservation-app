@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { IconButton } from "@carbon/react";
 import { ChevronLeft, ChevronRight } from "@carbon/icons-react";
 import type { AdminReservation } from "@/lib/api";
@@ -31,6 +31,14 @@ interface Props {
   // niente evidenza esaurimento, solo il colore default per --has-items.
   totalCapacity: number | null;
   onDayClick: (iso: string) => void;
+  // Notifica al parent il mese attualmente visualizzato (Date al primo del
+  // mese, UTC). Chiamato al mount E ad ogni navigazione prev/next. Il parent
+  // lo usa per filtrare la fetch a "questo mese" (Da/A automatici).
+  onMonthChange?: (firstOfMonthUtc: Date) => void;
+  // Mese iniziale. Letto solo al mount: serve a "ricordare" il mese tra
+  // smontaggio/rimontaggio quando l'admin passa list→calendar→list. Default =
+  // mese corrente. Tipicamente il padre passa il mese di `dateFrom` corrente.
+  initialMonth?: Date;
 }
 
 function isoFromUtc(d: Date): string {
@@ -62,10 +70,20 @@ export function AdminReservationsCalendar({
   items,
   totalCapacity,
   onDayClick,
+  onMonthChange,
+  initialMonth,
 }: Props) {
   const [currentMonth, setCurrentMonth] = useState(() =>
-    startOfMonthUtc(todayUtc()),
+    initialMonth ? startOfMonthUtc(initialMonth) : startOfMonthUtc(todayUtc()),
   );
+
+  // Propaga al parent il mese visualizzato (al mount + ad ogni cambio).
+  // Effect separato per non legare la callback al render iniziale del
+  // calendar — se il parent rifà render, currentMonth resta lo stesso e
+  // l'effect non rispara.
+  useEffect(() => {
+    onMonthChange?.(currentMonth);
+  }, [currentMonth, onMonthChange]);
 
   // Aggregazione count per giorno: si ricalcola solo al cambio di items.
   // `r.date` arriva come ISO datetime (es. "2026-06-12T00:00:00.000Z");

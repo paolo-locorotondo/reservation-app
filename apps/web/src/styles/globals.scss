@@ -20,11 +20,59 @@ main {
   margin: 0 auto;
 }
 
-// Carbon $breakpoint-md = 672px. Sotto, riduciamo il padding e collassiamo la
-// griglia dei filtri a singola colonna.
+// Wrapper Carbon `<Content>` (header offset + padding pagina). Sostituisce il
+// vecchio inline `style={{ padding: "2rem", marginTop: "3rem" }}` per poter
+// rispondere a media query — su mobile azzeriamo il padding del Content
+// così tutto lo spazio orizzontale resta al `<main>` interno.
+.rsv-app-content {
+  padding: 2rem;
+  margin-top: 3rem;
+}
+
+// Carbon $breakpoint-md = 672px. Sotto, riduciamo i padding dell'intera
+// catena (Content → main → rsv-spot-tab) per dare più larghezza utile ai
+// form/filtri/datepicker su schermi stretti. Ogni livello toglie un po' di
+// spazio: 2rem (Content) + 2rem (main) + 1.5rem (rsv-spot-tab) = 5.5rem
+// per lato su mobile è troppo, da qui la cascata.
 @media (max-width: 671px) {
   main {
-    padding: 1rem;
+    padding: 0.5rem;
+  }
+  .rsv-app-content {
+    padding: 0;
+  }
+  .rsv-spot-tab {
+    padding: 0.75rem;
+  }
+}
+
+// Branding header adattivo: lo stesso `<HeaderName>` mostra "IBM Reservation"
+// su desktop e solo l'icona Home su mobile. Carbon $breakpoint-md = 672px è
+// il taglio: sotto, lo spazio per la HeaderGlobalBar (icone nav + utente +
+// Esci) era insufficiente col testo lungo, e l'ultima icona veniva tagliata.
+//
+// Su mobile nascondiamo sia il testo "Reservation" (rsv-brand-text) sia il
+// prefix Carbon "IBM" (cds--header__name--prefix, classe pubblica del DOM
+// renderizzato da HeaderName) — così resta visibile solo l'icona casetta.
+.rsv-brand-home {
+  display: none;
+}
+@media (max-width: 671px) {
+  // Forziamo il centering verticale del wrapper: HeaderName è disegnato
+  // per testo (baseline alignment), ma su mobile dentro c'è solo un SVG —
+  // serve flex+center per non avere offset di sub-pixel rispetto alle
+  // HeaderGlobalAction adiacenti. `display: block` sul SVG elimina il
+  // baseline-gap residuo dell'inline-flow.
+  .rsv-brand {
+    display: flex;
+    align-items: center;
+  }
+  .rsv-brand .cds--header__name--prefix,
+  .rsv-brand-text {
+    display: none;
+  }
+  .rsv-brand-home {
+    display: block;
   }
 }
 
@@ -575,6 +623,15 @@ main {
   transition:
     background-color 120ms ease,
     border-color 120ms ease;
+
+  // Hover di default per celle in stato base (no --available, no --full,
+  // no --disabled, no --has-items): Carbon gray-10. Rilevante soprattutto
+  // in /my-reservations (showAvailability=false → la maggior parte delle
+  // celle è in stato base) e in /admin/reservations vista calendar.
+  // Le varianti più sotto sovrascrivono questo per i loro hover specifici.
+  &:hover {
+    background: #f4f4f4;
+  }
 
   &:focus-visible {
     outline: 2px solid #0f62fe;

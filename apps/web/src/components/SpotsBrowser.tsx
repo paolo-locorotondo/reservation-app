@@ -63,8 +63,27 @@ function nextStatus(prev: StatusFilter, target: "AVAILABLE" | "OCCUPIED"): Statu
   return null;
 }
 
+// Da tenere allineato a `MAX_DAYS_AHEAD` di `apps/api/src/common/business-rules.ts`
+// (env: NEXT_PUBLIC_MAX_DAYS_AHEAD client, MAX_DAYS_AHEAD backend). Stesso
+// valore già letto in SpotsCalendar.
+const MAX_DAYS_AHEAD = process.env.NEXT_PUBLIC_MAX_DAYS_AHEAD
+  ? Number(process.env.NEXT_PUBLIC_MAX_DAYS_AHEAD)
+  : 30;
+
 function todayIso(): string {
   const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+// Limite superiore per il DatePicker delle pagine /parking e /desks: non
+// permettiamo di selezionare date oltre `MAX_DAYS_AHEAD` (il backend
+// rifiuterebbe la prenotazione comunque). flatpickr disabilita visivamente
+// le celle oltre il maxDate.
+function maxIso(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + MAX_DAYS_AHEAD);
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${m}-${day}`;
@@ -195,9 +214,14 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
     if (view !== "calendar") return;
     api
       .listMyReservations()
-      .then((items: MyReservation[]) => {
+      .then((res) => {
+        // Qui ci interessa solo l'overlay "giorni miei" sul calendario
+        // dei posti — il flag `truncated` e il `limit` non sono rilevanti
+        // (nessun banner UI in questa pagina). Se il backend tronca, al
+        // peggio l'overlay manca su un giorno molto lontano nel futuro,
+        // accettabile come trade-off.
         const set = new Set<string>();
-        for (const r of items) {
+        for (const r of res.items) {
           if (r.spot.type !== type) continue;
           if (r.status !== "ACTIVE") continue;
           if (siteId && r.spot.floor.site.id !== siteId) continue;
@@ -350,6 +374,7 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
               locale={datePickerLocale}
               value={date}
               minDate={todayIso()}
+              maxDate={maxIso()}
               onChange={(dates: Date[]) => {
                 if (dates[0]) setDate(isoFromDate(dates[0]));
               }}

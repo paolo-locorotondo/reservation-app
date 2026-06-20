@@ -42,6 +42,15 @@ export interface AdminReservationsResponse {
   limit: number;
 }
 
+// Shape simmetrica a `AdminReservationsResponse` per l'endpoint /reservations/me:
+// items + flag di troncatura + limite. Lato UI il banner "Risultati troncati"
+// usa la stessa logica della pagina admin (vedi MyReservationsList).
+export interface MyReservationsResponse {
+  items: MyReservation[];
+  truncated: boolean;
+  limit: number;
+}
+
 export interface AdminReservationsQuery {
   siteId?: string;
   floorId?: string;
@@ -146,12 +155,13 @@ export const api = {
     call<{ id: string; status: "ACTIVE" | "CANCELLED" }>(`/reservations/${id}`, {
       method: "DELETE",
     }),
-  listMyReservations: (params?: { from?: string; to?: string }) => {
+  listMyReservations: (params?: { from?: string; to?: string; type?: SpotType }) => {
     const qs = new URLSearchParams();
     if (params?.from) qs.set("from", params.from);
     if (params?.to) qs.set("to", params.to);
+    if (params?.type) qs.set("type", params.type);
     const q = qs.toString();
-    return call<MyReservation[]>(`/reservations/me${q ? `?${q}` : ""}`);
+    return call<MyReservationsResponse>(`/reservations/me${q ? `?${q}` : ""}`);
   },
   listAdminReservations: (params: AdminReservationsQuery) => {
     const qs = new URLSearchParams();

@@ -45,6 +45,21 @@ interface Props {
   // proprie prenotazioni + scorciatoia "vai a prenotare", senza fetch
   // disponibilità (sarebbe rumore informativo).
   showAvailability?: boolean;
+  // Notifica al parent il mese attualmente visualizzato (Date al primo del
+  // mese, UTC). Chiamato al mount + ad ogni navigazione prev/next.
+  // /my-reservations lo usa per filtrare la fetch lista a "questo mese"
+  // così il LIMIT vale per-mese e il banner truncated è meaningful.
+  onMonthChange?: (firstOfMonthUtc: Date) => void;
+  // Default false: prev disabled se l'intero mese precedente è < oggi, next
+  // disabled se il mese successivo è > oggi+MAX_DAYS_AHEAD. Quando true
+  // (usato in /my-reservations) prev/next sono sempre abilitati: la
+  // navigazione è puramente di lettura, non vincolata ai limiti di prenotazione.
+  unboundedNavigation?: boolean;
+  // Mese iniziale. Letto solo al mount: serve a "ricordare" il mese tra
+  // smontaggio/rimontaggio quando l'utente passa list→calendar→list. Default
+  // = mese corrente. Tipicamente il padre passa il mese di `dateFrom` corrente
+  // (se valorizzato) così il calendar si riallinea al filtro della lista.
+  initialMonth?: Date;
 }
 
 function isoFromUtc(d: Date): string {
@@ -86,8 +101,18 @@ export function SpotsCalendar({
   myReservationLabels,
   onDayClick,
   showAvailability = true,
+  onMonthChange,
+  unboundedNavigation = false,
+  initialMonth,
 }: Props) {
-  const [currentMonth, setCurrentMonth] = useState(() => startOfMonthUtc(todayUtc()));
+  const [currentMonth, setCurrentMonth] = useState(() =>
+    initialMonth ? startOfMonthUtc(initialMonth) : startOfMonthUtc(todayUtc()),
+  );
+
+  // Propaga al parent il mese visualizzato (al mount + ad ogni cambio).
+  useEffect(() => {
+    onMonthChange?.(currentMonth);
+  }, [currentMonth, onMonthChange]);
   const [data, setData] = useState<Map<string, { available: number; total: number }>>(
     new Map(),
   );
@@ -199,15 +224,17 @@ export function SpotsCalendar({
   }
 
   // prev disabled quando l'intero mese precedente è prima di oggi.
+  // next disabled quando il primo giorno del mese successivo è oltre oggi+30gg.
+  // In modalità `unboundedNavigation` (es. /my-reservations) entrambi i
+  // bound sono disabilitati: la lettura non è vincolata da MAX_DAYS_AHEAD.
   const prevMonthEnd = endOfMonthUtc(
     new Date(Date.UTC(currentMonth.getUTCFullYear(), currentMonth.getUTCMonth() - 1, 1)),
   );
-  const prevDisabled = prevMonthEnd.getTime() < today.getTime();
-  // next disabled quando il primo giorno del mese successivo è oltre oggi+30gg.
+  const prevDisabled = !unboundedNavigation && prevMonthEnd.getTime() < today.getTime();
   const nextMonthStart = new Date(
     Date.UTC(currentMonth.getUTCFullYear(), currentMonth.getUTCMonth() + 1, 1),
   );
-  const nextDisabled = nextMonthStart.getTime() > maxDate.getTime();
+  const nextDisabled = !unboundedNavigation && nextMonthStart.getTime() > maxDate.getTime();
 
   return (
     <div className="rsv-calendar">

@@ -44,9 +44,15 @@ export const AdminUpdateReservationSchema = z.object({
 });
 export type AdminUpdateReservationDto = z.infer<typeof AdminUpdateReservationSchema>;
 
+// Query string di /reservations/me. Tutti i parametri opzionali; quando
+// presenti restringono il dataset (e quindi anche il `truncated` flag della
+// response). `type` permette di chiedere solo PARKING o solo DESK — usato
+// dalla UI per fetchare per-tab indipendentemente, così il limite
+// MY_RESERVATIONS_LIST_LIMIT vale per-tipo e non sull'aggregato.
 export const ReservationsRangeQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  type: SpotTypeSchema.optional(),
 });
 export type ReservationsRangeQuery = z.infer<typeof ReservationsRangeQuerySchema>;
 
@@ -71,7 +77,15 @@ export const AdminReservationsQuerySchema = z.object({
 });
 export type AdminReservationsQuery = z.infer<typeof AdminReservationsQuerySchema>;
 
-// Limite hardcoded di righe ritornate dall'endpoint admin. Se il dataset
-// filtrato lo supera, `truncated=true` e il client mostra un banner che invita
-// a restringere i filtri. Niente UI di paginazione per ora (vedi DEPLOY/plan).
-export const ADMIN_RESERVATIONS_LIMIT = 500;
+// Limiti di default per le list view (admin + utente). Se il dataset filtrato
+// supera il limite, `truncated=true` nella response e il client mostra un
+// banner che invita a restringere i filtri. Niente UI di paginazione per ora.
+//
+// Sono *default*: il backend può sovrascriverli via env var
+// (`ADMIN_RESERVATIONS_LIST_LIMIT`, `MY_RESERVATIONS_LIST_LIMIT`) — vedi
+// `reservations.service.ts`. Lato client questi valori non sono direttamente
+// usati: il `limit` mostrato nel banner arriva sempre dalla response del
+// backend (response.limit), così il client riflette sempre il valore reale
+// usato dal server.
+export const ADMIN_RESERVATIONS_LIST_LIMIT = 500;
+export const MY_RESERVATIONS_LIST_LIMIT = 100;

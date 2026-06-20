@@ -8,11 +8,32 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { MAX_DAYS_AHEAD } from "../common/business-rules";
 import {
-  ADMIN_RESERVATIONS_LIMIT,
+  ADMIN_RESERVATIONS_LIST_LIMIT,
+  MY_RESERVATIONS_LIST_LIMIT,
   type AdminReservationsQuery,
   type CreateReservationDto,
   type ReservationsRangeQuery,
 } from "@reservation/shared";
+
+// Lookup env-based con fallback alla costante shared. Pattern simmetrico a
+// `MAX_DAYS_AHEAD` in `common/business-rules.ts`: il valore numerico dalla
+// env (se presente, intero, > 0); altrimenti il default del package shared.
+// Letto al boot del modulo Nest, no live-reload — un cambio env richiede
+// restart del server (accettabile: questi limiti cambiano di rado).
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+const ADMIN_LIST_LIMIT = envInt(
+  "ADMIN_RESERVATIONS_LIST_LIMIT",
+  ADMIN_RESERVATIONS_LIST_LIMIT,
+);
+const MY_LIST_LIMIT = envInt(
+  "MY_RESERVATIONS_LIST_LIMIT",
+  MY_RESERVATIONS_LIST_LIMIT,
+);
 
 @Injectable()
 export class ReservationsService {
@@ -206,11 +227,11 @@ export class ReservationsService {
     limit: number;
   }> {
     const items = await this.findAdminItems(q);
-    const truncated = items.length > ADMIN_RESERVATIONS_LIMIT;
+    const truncated = items.length > ADMIN_LIST_LIMIT;
     return {
-      items: truncated ? items.slice(0, ADMIN_RESERVATIONS_LIMIT) : items,
+      items: truncated ? items.slice(0, ADMIN_LIST_LIMIT) : items,
       truncated,
-      limit: ADMIN_RESERVATIONS_LIMIT,
+      limit: ADMIN_LIST_LIMIT,
     };
   }
 
@@ -245,8 +266,14 @@ export class ReservationsService {
 
     return this.prisma.reservation.findMany({
       where,
-      orderBy: { date: "asc" },
-      take: ADMIN_RESERVATIONS_LIMIT + 1, // +1 per scoprire la troncatura
+      // Default DESC: l'admin vede prima le prenotazioni più recenti (per data
+      // del posto, non createdAt). In combinazione col troncamento a 500
+      // questo è anche più utile dell'ASC: se i risultati superano il limite,
+      // si vedono i 500 più recenti — quelli "che servono ora" — anziché i
+      // 500 più vecchi. Il sort UI client-side sovrascrive quando l'admin
+      // clicca un'intestazione di colonna.
+      orderBy: { date: "desc" },
+      take: ADMIN_LIST_LIMIT + 1, // +1 per scoprire la troncatura
       include: {
         spot: {
           include: {
@@ -264,14 +291,32 @@ export class ReservationsService {
       userId,
       status: "ACTIVE",
     };
+    // Filtro per tipo: la UI chiama l'endpoint una volta per tab (PARKING e
+    // DESK separatamente), così il limite MY_LIST_LIMIT e il flag truncated
+    // sono per-tipo (simmetrico al pattern admin), non sull'aggregato dei
+    // tipi.
+    if (q.type) where.spotType = q.type;
+    // Lettura senza vincoli temporali: l'utente può visualizzare TUTTE le sue
+    // prenotazioni (anche quelle del passato — ACTIVE non automaticamente
+    // archiviate — e oltre MAX_DAYS_AHEAD se in qualche modo esistono).
+    // `parseDateOnly` valida solo il formato, niente range check.
+    // MAX_DAYS_AHEAD applica solo alle AZIONI (create/cancel?), non alla
+    // lettura: vedi `parseDateUtc` in create() e i vincoli del client.
     if (q.from || q.to) {
       where.date = {};
-      if (q.from) (where.date as Prisma.DateTimeFilter).gte = parseDateUtc(q.from);
-      if (q.to) (where.date as Prisma.DateTimeFilter).lte = parseDateUtc(q.to);
+      if (q.from) (where.date as Prisma.DateTimeFilter).gte = parseDateOnly(q.from);
+      if (q.to) (where.date as Prisma.DateTimeFilter).lte = parseDateOnly(q.to);
     }
-    return this.prisma.reservation.findMany({
+    // Stessa strategia dell'endpoint admin: chiediamo +1 per scoprire la
+    // troncatura senza un `count()` separato. Se ne arrivano LIMIT+1, sappiamo
+    // che ce n'erano almeno LIMIT+1 e tagliamo a LIMIT con `truncated: true`.
+    const rows = await this.prisma.reservation.findMany({
       where,
-      orderBy: { date: "asc" },
+      // Default DESC: l'utente vede prima la prenotazione più lontana nel
+      // futuro. Il sort UI client-side sovrascrive quando si clicca una
+      // colonna nella vista Lista.
+      orderBy: { date: "desc" },
+      take: MY_LIST_LIMIT + 1,
       include: {
         spot: {
           include: {
@@ -281,6 +326,12 @@ export class ReservationsService {
         },
       },
     });
+    const truncated = rows.length > MY_LIST_LIMIT;
+    return {
+      items: truncated ? rows.slice(0, MY_LIST_LIMIT) : rows,
+      truncated,
+      limit: MY_LIST_LIMIT,
+    };
   }
 }
 
