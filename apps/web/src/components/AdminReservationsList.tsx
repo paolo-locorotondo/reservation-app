@@ -1,0 +1,695 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  DataTable,
+  Table,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableBody,
+  TableCell,
+  TableContainer,
+  Button,
+  IconButton,
+  InlineLoading,
+  InlineNotification,
+  Search,
+  Select,
+  SelectItem,
+  DatePicker,
+  DatePickerInput,
+  ContentSwitcher,
+  Switch,
+  Tabs,
+  TabList,
+  Tab,
+  TabPanels,
+  TabPanel,
+  FilterableMultiSelect,
+} from "@carbon/react";
+import {
+  ArrowsVertical,
+  ArrowUp,
+  ArrowDown,
+  Renew,
+} from "@carbon/icons-react";
+import { Italian } from "flatpickr/dist/l10n/it.js";
+import type { CustomLocale } from "flatpickr/dist/types/locale";
+import type { Site, Floor, SpotType, ReservationStatus } from "@reservation/shared";
+import {
+  api,
+  ApiError,
+  type AdminReservation,
+  type AdminUserItem,
+} from "@/lib/api";
+import { FiltersPanel } from "./FiltersPanel";
+import { AdminReservationsCalendar } from "./AdminReservationsCalendar";
+
+// HEADERS della tabella per-tab. Niente colonna "Tipo": è già discriminata
+// dal Tab attivo.
+const HEADERS = [
+  { key: "date", header: "Data" },
+  { key: "user", header: "Utente" },
+  { key: "code", header: "Codice" },
+  { key: "site", header: "Sede" },
+  { key: "floor", header: "Piano" },
+  { key: "zone", header: "Zona" },
+  { key: "status", header: "Stato" },
+  { key: "createdAt", header: "Creata il" },
+  { key: "cancelledAt", header: "Cancellata il" },
+];
+
+const SORTABLE_KEYS = new Set([
+  "date",
+  "user",
+  "code",
+  "site",
+  "floor",
+  "zone",
+  "status",
+  "createdAt",
+  "cancelledAt",
+]);
+
+type SortState = { key: string; dir: "asc" | "desc" } | null;
+function nextSort(prev: SortState, key: string): SortState {
+  if (!prev || prev.key !== key) return { key, dir: "asc" };
+  if (prev.dir === "asc") return { key, dir: "desc" };
+  return null;
+}
+
+function formatDate(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const DT_FMT = new Intl.DateTimeFormat("it-IT", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+function formatDateTime(iso: string | Date): string {
+  return DT_FMT.format(typeof iso === "string" ? new Date(iso) : iso);
+}
+
+function isoFromDate(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+export function AdminReservationsList() {
+  // State a livello pagina, condiviso tra i due tab.
+  const [view, setView] = useState<"list" | "calendar">("calendar");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  // Lista utenti per il MultiSelect. Caricata al mount + ad ogni incremento
+  // di `usersReloadTick`: il bottone Renew del tab corrente lo aggiorna così
+  // l'admin vede subito gli utenti appena registrati senza dover fare F5.
+  const [users, setUsers] = useState<AdminUserItem[]>([]);
+  const [usersError, setUsersError] = useState<string | null>(null);
+  const [usersReloadTick, setUsersReloadTick] = useState(0);
+
+  useEffect(() => {
+    api
+      .listAdminUsers()
+      .then(setUsers)
+      .catch((e: ApiError) => setUsersError(`Caricamento utenti: ${e.message}`));
+  }, [usersReloadTick]);
+
+  const reloadUsers = () => setUsersReloadTick((t) => t + 1);
+
+  return (
+    <main>
+      <div className="rsv-page-header-row">
+        <div>
+          <h1 style={{ marginBottom: "0.25rem" }}>Amministrazione — Prenotazioni</h1>
+          <p style={{ marginBottom: 0, color: "#525252" }}>
+            Tutte le prenotazioni del sistema. Usa i filtri per restringere; clicca un giorno del calendario per vedere il dettaglio nella vista Lista.
+          </p>
+        </div>
+        <ContentSwitcher
+          size="sm"
+          selectedIndex={view === "calendar" ? 0 : 1}
+          onChange={({ name }) => setView(name === "calendar" ? "calendar" : "list")}
+          aria-label="Vista calendario o lista"
+        >
+          <Switch name="calendar" text="Calendario" />
+          <Switch name="list" text="Lista" />
+        </ContentSwitcher>
+      </div>
+
+      {usersError && (
+        <InlineNotification
+          kind="warning"
+          title="Avviso"
+          subtitle={usersError}
+          onCloseButtonClick={() => setUsersError(null)}
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      <Tabs
+        selectedIndex={selectedIndex}
+        onChange={({ selectedIndex: i }) => setSelectedIndex(i)}
+      >
+        <TabList aria-label="Tipo di prenotazione" contained>
+          <Tab>Posti auto</Tab>
+          <Tab>Scrivanie</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <AdminReservationsTab
+              tabKey="PARKING"
+              type="PARKING"
+              view={view}
+              users={users}
+              onSwitchToList={() => setView("list")}
+              onReloadUsers={reloadUsers}
+            />
+          </TabPanel>
+          <TabPanel>
+            <AdminReservationsTab
+              tabKey="DESK"
+              type="DESK"
+              view={view}
+              users={users}
+              onSwitchToList={() => setView("list")}
+              onReloadUsers={reloadUsers}
+            />
+          </TabPanel>
+        </TabPanels>
+      </Tabs>
+    </main>
+  );
+}
+
+interface AdminReservationsTabProps {
+  tabKey: string;
+  type: SpotType;
+  view: "list" | "calendar";
+  users: AdminUserItem[];
+  onSwitchToList: () => void;
+  // Refetch della lista utenti (state nel parent). Cliccato dal bottone Renew
+  // insieme al refetch delle prenotazioni del tab corrente.
+  onReloadUsers: () => void;
+}
+
+// Sotto-componente per il contenuto di un tab. Stato dei filtri indipendente
+// per tab — coerente con il pattern di MyReservationsList → ReservationsTab.
+function AdminReservationsTab({
+  tabKey,
+  type,
+  view,
+  users,
+  onSwitchToList,
+  onReloadUsers,
+}: AdminReservationsTabProps) {
+  const [sites, setSites] = useState<Site[]>([]);
+  const [floors, setFloors] = useState<Floor[]>([]);
+  const [siteId, setSiteId] = useState<string>("");
+  const [floorId, setFloorId] = useState<string>("");
+  const [zoneName, setZoneName] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<ReservationStatus | "">("ACTIVE");
+  const [dateFrom, setDateFrom] = useState<string | null>(null);
+  const [dateTo, setDateTo] = useState<string | null>(null);
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+
+  const [items, setItems] = useState<AdminReservation[]>([]);
+  const [truncated, setTruncated] = useState(false);
+  const [limit, setLimit] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+  const [sort, setSort] = useState<SortState>(null);
+  // Numero totale di spot del filtro corrente (type + sede + piano + zona).
+  // Serve al calendar per evidenziare i giorni "esauriti" (count >= total).
+  // null = non ancora caricato (calendar non mostra --full).
+  const [totalCapacity, setTotalCapacity] = useState<number | null>(null);
+
+  const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    const lang = navigator.language?.toLowerCase() ?? "";
+    if (lang.startsWith("it")) setDatePickerLocale(Italian);
+  }, []);
+
+  // Sites una volta sola.
+  useEffect(() => {
+    api
+      .listSites()
+      .then(setSites)
+      .catch((e: ApiError) => setError(`Caricamento sedi: ${e.message}`));
+  }, []);
+
+  // Floors al cambio di siteId.
+  useEffect(() => {
+    if (!siteId) {
+      setFloors([]);
+      setFloorId("");
+      return;
+    }
+    setFloorId("");
+    api
+      .listFloors(siteId)
+      .then(setFloors)
+      .catch((e: ApiError) => setError(`Caricamento piani: ${e.message}`));
+  }, [siteId]);
+
+  // Capacity totale del filtro (tipo + sede + piano + zona). Serve al calendar
+  // per evidenziare i giorni "esauriti" — count prenotazioni >= numero totale
+  // di spot del filtro. Riusa `listSpots` con date=oggi: il `total` non
+  // dipende dalla data scelta (è il numero di Spot attivi che matchano).
+  // Lo filtriamo lato client per `zoneName` perché `listSpots` non lo supporta
+  // (il backend admin invece sì, vedi listAdmin where.spot.zone.name ILIKE).
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listSpots({
+        type,
+        date: isoFromDate(new Date()),
+        siteId: siteId || undefined,
+        floorId: floorId || undefined,
+      })
+      .then((spots) => {
+        if (cancelled) return;
+        const needle = zoneName.trim().toLowerCase();
+        const filtered = needle
+          ? spots.filter((s) => (s.zoneName ?? "").toLowerCase().includes(needle))
+          : spots;
+        setTotalCapacity(filtered.length);
+      })
+      .catch(() => {
+        // Best-effort: senza capacity il calendar mostra solo --has-items, non
+        // --full. Niente notifica all'utente, non è bloccante.
+        if (cancelled) return;
+        setTotalCapacity(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [type, siteId, floorId, zoneName]);
+
+  // Fetch principale: cleanup guard per evitare race tra fetch sovrapposti.
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    let cancelled = false;
+    api
+      .listAdminReservations({
+        type,
+        siteId: siteId || undefined,
+        floorId: floorId || undefined,
+        zoneName: zoneName.trim() || undefined,
+        status: statusFilter || undefined,
+        from: dateFrom || undefined,
+        to: dateTo || undefined,
+        userIds: selectedUserIds.length > 0 ? selectedUserIds : undefined,
+      })
+      .then((res) => {
+        if (cancelled) return;
+        setItems(res.items);
+        setTruncated(res.truncated);
+        setLimit(res.limit);
+      })
+      .catch((e: ApiError) => {
+        if (cancelled) return;
+        setError(`Caricamento prenotazioni: ${e.message}`);
+        setItems([]);
+        setTruncated(false);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    type,
+    siteId,
+    floorId,
+    zoneName,
+    statusFilter,
+    dateFrom,
+    dateTo,
+    selectedUserIds,
+    reloadTick,
+  ]);
+
+  const rows = useMemo(() => {
+    return items.map((r) => ({
+      id: r.id,
+      date: formatDate(r.date),
+      user: `${r.user.displayName} <${r.user.email}>`,
+      code: r.spot.code,
+      site: r.spot.floor.site.name,
+      floor: r.spot.floor.name,
+      zone: r.spot.zone?.name ?? "—",
+      status: r.status === "ACTIVE" ? "Attiva" : "Cancellata",
+      createdAt: formatDateTime(r.createdAt),
+      cancelledAt: r.status === "CANCELLED" ? formatDateTime(r.updatedAt) : "—",
+    }));
+  }, [items]);
+
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+    return [...rows].sort((a, b) => {
+      const k = sort.key as keyof typeof a;
+      const cmp = String(a[k] ?? "").localeCompare(String(b[k] ?? ""), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+      return sort.dir === "asc" ? cmp : -cmp;
+    });
+  }, [rows, sort]);
+
+  const filtersActive =
+    siteId !== "" ||
+    floorId !== "" ||
+    zoneName !== "" ||
+    statusFilter !== "ACTIVE" ||
+    dateFrom !== null ||
+    dateTo !== null ||
+    selectedUserIds.length > 0;
+
+  function resetFilters() {
+    setSiteId("");
+    setFloorId("");
+    setZoneName("");
+    setStatusFilter("ACTIVE");
+    setDateFrom(null);
+    setDateTo(null);
+    setSelectedUserIds([]);
+  }
+
+  // Items selezionati nel MultiSelect: ricalcolati ogni volta che cambia
+  // selectedUserIds o la lista users (fetched a livello pagina).
+  const selectedUsers = useMemo(
+    () => users.filter((u) => selectedUserIds.includes(u.id)),
+    [users, selectedUserIds],
+  );
+
+  const filtersSummary = (() => {
+    const parts: string[] = [];
+    parts.push(`Sede: ${sites.find((s) => s.id === siteId)?.name ?? "Tutte"}`);
+    parts.push(
+      `Piano: ${floorId ? floors.find((f) => f.id === floorId)?.name ?? "—" : "Tutti"}`,
+    );
+    if (zoneName) parts.push(`Zona: "${zoneName}"`);
+    parts.push(
+      `Stato: ${
+        statusFilter === "ACTIVE"
+          ? "Attive"
+          : statusFilter === "CANCELLED"
+            ? "Cancellate"
+            : "Tutti"
+      }`,
+    );
+    if (dateFrom) parts.push(`Da: ${dateFrom}`);
+    if (dateTo) parts.push(`A: ${dateTo}`);
+    if (selectedUsers.length > 0) {
+      parts.push(
+        `Utenti: ${selectedUsers.length === 1 ? selectedUsers[0].displayName : `${selectedUsers.length} selezionati`}`,
+      );
+    }
+    return parts.join(" · ");
+  })();
+
+  const filtersActiveCount =
+    (siteId ? 1 : 0) +
+    (floorId ? 1 : 0) +
+    (zoneName ? 1 : 0) +
+    (statusFilter !== "ACTIVE" ? 1 : 0) +
+    (dateFrom ? 1 : 0) +
+    (dateTo ? 1 : 0) +
+    (selectedUserIds.length > 0 ? 1 : 0);
+
+  // Click su un giorno del calendar: setto Da/A allo stesso ISO e passo
+  // al parent per switchare la view a Lista. La fetch effect re-triggererà.
+  function handleDayClick(iso: string) {
+    setDateFrom(iso);
+    setDateTo(iso);
+    onSwitchToList();
+  }
+
+  return (
+    <>
+      <FiltersPanel summary={filtersSummary} activeCount={filtersActiveCount}>
+        {/* Tre righe semantiche di filtri. Ognuna distribuisce i suoi campi a
+            larghezza piena con `auto-fit + minmax`: se lo schermo è stretto,
+            gli ultimi campi della riga vanno a capo dentro la stessa riga. */}
+        <div className="rsv-filters-stack">
+          {/* Riga 1: filtri spaziali (Sede + Piano + Zona). */}
+          <div className="rsv-filter-row">
+            <Select
+              id={`admin-site-${tabKey}`}
+              labelText="Sede"
+              value={siteId}
+              onChange={(e) => setSiteId(e.target.value)}
+            >
+              <SelectItem value="" text="Tutte le sedi" />
+              {sites.map((s) => (
+                <SelectItem key={s.id} value={s.id} text={s.name} />
+              ))}
+            </Select>
+            <Select
+              id={`admin-floor-${tabKey}`}
+              labelText="Piano"
+              value={floorId}
+              onChange={(e) => setFloorId(e.target.value)}
+              disabled={!siteId}
+            >
+              <SelectItem value="" text="Tutti i piani" />
+              {floors.map((f) => (
+                <SelectItem key={f.id} value={f.id} text={f.name} />
+              ))}
+            </Select>
+            {/* Carbon `Search` non mostra `labelText` visivamente (a11y only):
+                 il campo finirebbe top-allineato col placeholder mentre Select
+                 hanno la label sopra. Wrap manuale con <label> Carbon-styled
+                 per uniformare l'altezza alle altre celle della riga. */}
+            <div>
+              <label
+                htmlFor={`admin-zone-${tabKey}`}
+                className="cds--label"
+              >
+                Zona
+              </label>
+              <Search
+                id={`admin-zone-${tabKey}`}
+                labelText="Zona"
+                placeholder="Cerca zona…"
+                size="md"
+                value={zoneName}
+                onChange={(e) => setZoneName(e.target.value)}
+                onClear={() => setZoneName("")}
+              />
+            </div>
+          </div>
+
+          {/* Riga 2: filtri temporali e di stato (Stato + Da + A). */}
+          <div className="rsv-filter-row">
+            <Select
+              id={`admin-status-${tabKey}`}
+              labelText="Stato"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as ReservationStatus | "")}
+            >
+              <SelectItem value="ACTIVE" text="Attive" />
+              <SelectItem value="CANCELLED" text="Cancellate" />
+              <SelectItem value="" text="Tutti" />
+            </Select>
+            <DatePicker
+              datePickerType="single"
+              dateFormat="Y-m-d"
+              locale={datePickerLocale}
+              value={dateFrom ?? ""}
+              onChange={(dates: Date[]) => {
+                setDateFrom(dates[0] ? isoFromDate(dates[0]) : null);
+              }}
+            >
+              <DatePickerInput
+                id={`admin-date-from-${tabKey}`}
+                labelText="Da"
+                placeholder="YYYY-MM-DD"
+              />
+            </DatePicker>
+            <DatePicker
+              datePickerType="single"
+              dateFormat="Y-m-d"
+              locale={datePickerLocale}
+              value={dateTo ?? ""}
+              onChange={(dates: Date[]) => {
+                setDateTo(dates[0] ? isoFromDate(dates[0]) : null);
+              }}
+            >
+              <DatePickerInput
+                id={`admin-date-to-${tabKey}`}
+                labelText="A"
+                placeholder="YYYY-MM-DD"
+              />
+            </DatePicker>
+          </div>
+
+          {/* Riga 3: filtro utenti full-width (1 campo, occupa tutta la riga). */}
+          <div className="rsv-filter-row">
+            <FilterableMultiSelect
+              id={`admin-users-${tabKey}`}
+              titleText="Utenti"
+              placeholder="Seleziona utenti…"
+              items={users}
+              itemToString={(u: AdminUserItem | null) =>
+                u ? `${u.displayName} (${u.email})` : ""
+              }
+              selectedItems={selectedUsers}
+              onChange={({ selectedItems }: { selectedItems: AdminUserItem[] | null }) =>
+                setSelectedUserIds((selectedItems ?? []).map((u) => u.id))
+              }
+            />
+          </div>
+        </div>
+
+        {filtersActive && (
+          <Button kind="ghost" size="sm" onClick={resetFilters}>
+            Reset filtri
+          </Button>
+        )}
+      </FiltersPanel>
+
+      <div
+        style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}
+      >
+        <IconButton
+          kind="ghost"
+          size="sm"
+          label="Aggiorna"
+          align="bottom-right"
+          onClick={() => {
+            // Doppio refresh: prenotazioni del tab corrente (state locale) +
+            // lista utenti del filtro MultiSelect (state pagina-livello).
+            // Così l'admin vede subito utenti appena registrati senza F5.
+            setReloadTick((t) => t + 1);
+            onReloadUsers();
+          }}
+          disabled={loading}
+        >
+          <Renew />
+        </IconButton>
+      </div>
+
+      {error && (
+        <InlineNotification
+          kind="error"
+          title="Errore"
+          subtitle={error}
+          onCloseButtonClick={() => setError(null)}
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      {truncated && view === "list" && (
+        <InlineNotification
+          kind="warning"
+          title="Risultati troncati"
+          subtitle={`Sono visibili solo i primi ${limit} risultati. Restringi i filtri per vedere il resto.`}
+          hideCloseButton
+          lowContrast
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      {view === "calendar" ? (
+        loading ? (
+          <InlineLoading description="Carico le prenotazioni…" />
+        ) : (
+          <AdminReservationsCalendar
+            items={items}
+            totalCapacity={totalCapacity}
+            onDayClick={handleDayClick}
+          />
+        )
+      ) : loading ? (
+        <InlineLoading description="Carico le prenotazioni…" />
+      ) : rows.length === 0 ? (
+        <p style={{ color: "#525252" }}>
+          Nessuna prenotazione corrisponde ai filtri applicati.
+        </p>
+      ) : (
+        <DataTable rows={sortedRows} headers={HEADERS}>
+          {({ rows: rs, headers, getHeaderProps, getRowProps, getTableProps }) => (
+            <TableContainer>
+              <Table {...getTableProps()}>
+                <TableHead>
+                  <TableRow>
+                    {headers.map((h) => {
+                      const { key, ...headerProps } = getHeaderProps({ header: h });
+                      const sortable = SORTABLE_KEYS.has(h.key);
+                      const sortDir = sort?.key === h.key ? sort.dir : null;
+                      const SortIcon =
+                        sortDir === "asc"
+                          ? ArrowUp
+                          : sortDir === "desc"
+                            ? ArrowDown
+                            : ArrowsVertical;
+                      const sortLabel = sortDir
+                        ? `Ordinato ${sortDir === "asc" ? "crescente" : "decrescente"} — clic per ${
+                            sortDir === "asc" ? "decrescente" : "rimuovere"
+                          }`
+                        : `Ordina ${h.header}`;
+                      return (
+                        <TableHeader key={key} {...headerProps}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.25rem",
+                            }}
+                          >
+                            <span>{h.header}</span>
+                            {sortable && (
+                              <IconButton
+                                kind="ghost"
+                                size="sm"
+                                label={sortLabel}
+                                align="bottom"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSort((prev) => nextSort(prev, h.key));
+                                }}
+                              >
+                                <SortIcon />
+                              </IconButton>
+                            )}
+                          </div>
+                        </TableHeader>
+                      );
+                    })}
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {rs.map((row) => {
+                    const { key: rowKey, ...rowProps } = getRowProps({ row });
+                    return (
+                      <TableRow key={rowKey} {...rowProps}>
+                        {row.cells.map((cell) => (
+                          <TableCell key={cell.id}>{String(cell.value)}</TableCell>
+                        ))}
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </DataTable>
+      )}
+    </>
+  );
+}

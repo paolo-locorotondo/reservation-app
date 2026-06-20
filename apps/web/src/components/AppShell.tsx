@@ -22,15 +22,17 @@ import {
   SkipToContent,
   Content,
 } from "@carbon/react";
-import { UserAvatar, Car, Devices, Calendar } from "@carbon/icons-react";
+import { UserAvatar, Car, Devices, Calendar, Group } from "@carbon/icons-react";
 import type { ComponentType, ReactNode } from "react";
 
 // Le icone vengono usate solo nella variante mobile dell'header (dove la nav
 // testuale collassa nel side menu). Su desktop si usano comunque le label.
-const NAV: { label: string; href: string; Icon: ComponentType }[] = [
+// `adminOnly: true` nasconde la voce ai non-ADMIN (filtrato in render).
+const NAV: { label: string; href: string; Icon: ComponentType; adminOnly?: boolean }[] = [
   { label: "Posti auto", href: "/parking", Icon: Car },
   { label: "Scrivanie", href: "/desks", Icon: Devices },
   { label: "Le mie prenotazioni", href: "/my-reservations", Icon: Calendar },
+  { label: "Amministrazione", href: "/admin/reservations", Icon: Group, adminOnly: true },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -41,6 +43,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const displayName = session?.user?.name ?? "";
   const email = session?.user?.email ?? "";
+  // Voci nav filtrate per ruolo. Le `adminOnly` sono visibili solo se il
+  // role della session è ADMIN (vedi types/next-auth.d.ts + lib/auth.ts che
+  // popola il claim da ADMIN_EMAILS).
+  const isAdmin = session?.user?.role === "ADMIN";
+  const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
 
   // Click-outside per chiudere il pannello utente. HeaderPanel non lo gestisce
   // nativamente: il pannello e il bottone trigger sono fratelli, quindi un
@@ -91,7 +98,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               Reservation
             </HeaderName>
             <HeaderNavigation aria-label="Sezioni">
-              {NAV.map((item) => (
+              {visibleNav.map((item) => (
                 <HeaderMenuItem
                   key={item.href}
                   href={item.href}
@@ -111,7 +118,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   testuale è già nascosta da Carbon). Su desktop la classe
                   `rsv-header-mobile-nav` le nasconde via CSS, evitando
                   duplicati con la nav testuale. */}
-              {NAV.map((item) => (
+              {visibleNav.map((item) => (
                 <HeaderGlobalAction
                   key={item.href}
                   aria-label={item.label}
@@ -167,7 +174,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               onSideNavBlur={onClickSideNavExpand}
             >
               <SideNavItems>
-                {NAV.map((item) => (
+                {visibleNav.map((item) => (
                   <SideNavLink
                     key={item.href}
                     href={item.href}

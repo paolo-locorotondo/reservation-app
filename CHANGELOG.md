@@ -2,6 +2,52 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-19 — Pagina Admin `/admin/reservations` (read-only, in stile `/my-reservations`)
+
+Implementato il **primo step** della "Pagina Admin / HR / Manager" del TODO. La spike Entra ID (Q1 — ruoli/riporti) resta aperta in attesa di confronto con HR; partiamo intanto dalla **sola visibilità** con il binario `USER`/`ADMIN` già in vigore. Niente azioni (cancel di altri / create-for-others), niente `MANAGER` con scoping riporti — sono i prossimi incrementi.
+
+**Outcome**: un utente con `role === "ADMIN"` (email in `ADMIN_EMAILS`) accede a `/admin/reservations` e vede tutte le prenotazioni del sistema. UX strutturata come `/my-reservations`: toggle **Calendario / Lista** + tabs **Posti auto / Scrivanie** + filtri ricchi inclusa selezione multipla utenti.
+
+### Backend
+- **Endpoint `GET /admin/reservations`** con `RolesGuard(['ADMIN'])`, in nuovo file [`admin-reservations.controller.ts`](apps/api/src/reservations/admin-reservations.controller.ts) (separato dal `reservations.controller.ts` per non mescolare paths). Riusa `ReservationsService` di `ReservationsModule`. Quando aggiungeremo `/admin/closures` e `/admin/settings` valuteremo se estrarre un `AdminModule`.
+- **Endpoint `GET /admin/users`** in [`admin-users.controller.ts`](apps/api/src/users/admin-users.controller.ts): popola il `FilterableMultiSelect` lato frontend. Niente paginazione: per MVP la lista è piccola; quando supererà 500 utenti passiamo a typeahead remoto.
+- **Schema** [`AdminReservationsQuerySchema`](packages/shared/src/reservation.schema.ts) — campi opzionali `siteId, floorId, zoneName, type, status, from, to, userIds[]`. `userIds` accetta sia singolo (`?userIds=a`) sia multipli (`?userIds=a&userIds=b`) via `z.union + transform` che normalizza ad array. Costante `ADMIN_RESERVATIONS_LIMIT = 500`.
+- **`ReservationsService.listAdmin`**: filtri opzionali, `where.userId = { in: userIds }` (più efficiente del precedente ILIKE su email/displayName), composizione del `where.spot` riorganizzata per supportare ortogonalmente `siteId|floorId + zoneName` (text search ILIKE su `Zone.name`). `take: limit + 1` per scoprire la troncatura in una sola query → ritorna `{items, truncated, limit}`. Niente default su `status`: il client decide.
+- **Helper `parseDateOnly()`**: variante di `parseDateUtc` senza vincoli temporali — admin filtra nel passato e oltre `MAX_DAYS_AHEAD`.
+
+### Frontend
+- **Voce nav** condizionale in [`AppShell.tsx`](apps/web/src/components/AppShell.tsx): "Amministrazione" → `/admin/reservations`, icona Carbon `Group`. Visibile solo se `session.user.role === "ADMIN"` (filtro `visibleNav`); coerente in `HeaderNavigation` desktop, `HeaderGlobalAction` icone mobile, `SideNav` drawer.
+- **API client** ([`api.ts`](apps/web/src/lib/api.ts)): tipi `AdminReservation`, `AdminReservationsResponse`, `AdminReservationsQuery`, `AdminUserItem`; metodi `listAdminReservations` e `listAdminUsers`.
+- **Page** [`/admin/reservations/page.tsx`](apps/web/src/app/(app)/admin/reservations/page.tsx) (server component sottile) → renderizza `AdminReservationsList`.
+- **Componente** [`AdminReservationsList`](apps/web/src/components/AdminReservationsList.tsx) in stile `MyReservationsList`:
+  - **Toggle Calendario / Lista** (`ContentSwitcher`, default Calendario) condiviso tra i tab.
+  - **Tabs PARKING / DESK** (Carbon `Tabs` controllati per evitare reset al rerender). Il filtro Tipo non è più nei filtri — è il Tab attivo.
+  - Sotto-componente `AdminReservationsTab` con stato indipendente per tab (replica del pattern `MyReservationsList → ReservationsTab`).
+  - **Filtri** organizzati in 3 righe semantiche dentro `FiltersPanel` collassabile:
+    - Riga 1 (spazio): Sede, Piano, Zona (Search ILIKE come `/my-reservations`)
+    - Riga 2 (tempo + stato): Stato (default ACTIVE), Da, A
+    - Riga 3 (utenti): `FilterableMultiSelect` Carbon con dataset preloaded, typeahead built-in
+  - Ogni riga è un grid `auto-fit + minmax(200px, 1fr)` con `align-items: start` + `row-gap`: i campi si distribuiscono a piena larghezza e vanno a capo solo internamente alla loro riga, evitando l'overlap di label che si verificava con un singolo grid 6+ figli.
+  - **Lista**: `DataTable` Carbon con 9 colonne (Data, Utente, Codice, Sede, Piano, Zona, Stato, Creata il, Cancellata il), sort per colonna, banner truncated. Read-only: niente click, niente modal cancel.
+- **Calendar admin** ([`AdminReservationsCalendar.tsx`](apps/web/src/components/AdminReservationsCalendar.tsx)): nuovo componente dedicato. Riusa la grid 7×N + header navigation di `SpotsCalendar` ma con tre differenze chiave:
+  - **Niente bound `MAX_DAYS_AHEAD`**: l'admin naviga liberamente prev/next nel passato/futuro.
+  - **Niente fetch interna**: aggrega lato client gli `items` di `listAdminReservations` in un `Map<iso, count>`. Cella sempre cliccabile (anche count = 0).
+  - **Stato visivo**: cella vuota se 0 prenotazioni; sfondo Carbon blue-10 + badge blue-60 col count se ≥ 1; **sfondo red-10 + badge red-60 quando "esaurito"** (count >= `totalCapacity` del filtro corrente). La capacity è fetchata via `api.listSpots()` con `date=today`, filtrata client-side per `zoneName` (listSpots non lo supporta nativamente).
+  - Click giorno → setta `dateFrom = dateTo = iso` sul tab e switcha a vista Lista (callback dal tab al parent). Coerente col pattern "calendar = panoramica, lista = dettaglio".
+
+### Sicurezza (doppia protezione)
+- **Backend**: `RolesGuard` su `AdminReservationsController` e `AdminUsersController`. Fonte di verità del check accesso è il claim `role` del JWT.
+- **Frontend**: [`middleware.ts`](apps/web/src/middleware.ts) intercetta `/admin/:path*` e fa redirect a `/403` (page dedicata sotto `(app)`) quando `token.role !== "ADMIN"`. UX più pulita di "pagina admin con banner errore" — l'utente non admin non vede mai la struttura della pagina admin.
+
+### Allineamento DB ↔ JWT al login
+Prima `User.role` a DB era un campo dormiente, popolato al primo provisioning e mai più aggiornato. Ora il callback `jwt` di [`lib/auth.ts`](apps/web/src/lib/auth.ts) chiama `GET /me` del backend ad ogni nuovo login (`account && profile` truthy), con un JWT firmato `HS256` come fa il proxy BFF — questo scatena `provisionFromToken()` che riallinea `User.role` col valore appena calcolato da `ADMIN_EMAILS`. Side effect fire-and-forget. Il check accessi resta comunque basato sul JWT, il DB è una denormalizzazione utile per future query analitiche.
+
+### Limiti accettati per MVP
+- I count del calendar derivano dagli stessi 500 max righe della lista. Se un mese supera il limite, alcuni giorni avranno count basso. Banner "Risultati troncati" mostrato in vista Lista, omesso in calendario per non duplicare.
+- Endpoint `/admin/users` senza paginazione (vedi sopra).
+- Tabella admin con 9 colonne è poco usabile su mobile: aggiunta nota in [TODO.md](TODO.md) per analizzare card layout / colonne nascondibili dopo aver visto l'uso reale.
+- Revoca privilegi ADMIN già loggati: il JWT è "frozen" al login (~30gg session). Token rimosso da `ADMIN_EMAILS` resta valido fino a logout/scadenza. Aggiunta nota in [TODO.md](TODO.md) come blocker pre-go-live, da decidere insieme a Q1 (Entra ID).
+
 ## 2026-06-11 — Etichetta "Sede · Codice" nel calendario di /my-reservations
 
 Migliorata la vista Calendario su `/my-reservations`: prima i giorni con propria prenotazione avevano solo un bordo blu, senza indicazione di QUALE prenotazione fosse. Ora la cella mostra anche un'etichetta `"<sede> · <codice>"` (es. `"Bari · P-01"`).

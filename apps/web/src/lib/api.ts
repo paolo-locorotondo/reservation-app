@@ -6,6 +6,7 @@ import type {
   SpotsAvailabilityDay,
   CreateReservationDto,
   Reservation,
+  ReservationStatus,
 } from "@reservation/shared";
 
 // Mia prenotazione, come restituita da GET /reservations/me — include lo spot
@@ -18,6 +19,45 @@ export interface MyReservation extends Reservation {
     floor: { id: string; name: string; site: { id: string; name: string; code: string } };
     zone: { id: string; name: string } | null;
   };
+}
+
+// Prenotazione vista dall'admin: lo spot+floor+site+zone come `MyReservation`,
+// più l'utente proprietario espanso (richiesto dalla colonna "Utente" della
+// tabella admin).
+export interface AdminReservation extends MyReservation {
+  user: { id: string; email: string; displayName: string };
+  // Anche updatedAt è incluso (ereditato dalla riga DB) — utile per la colonna
+  // "Cancellata il" quando status=CANCELLED.
+  updatedAt: string;
+  // spotType è denormalizzato nel DB (vedi schema.prisma), backend lo include
+  // nel payload — qui lo dichiariamo per type-safety, anche se è ridondante
+  // con `spot.type`.
+  spotType: SpotType;
+}
+
+export interface AdminReservationsResponse {
+  items: AdminReservation[];
+  truncated: boolean;
+  limit: number;
+}
+
+export interface AdminReservationsQuery {
+  siteId?: string;
+  floorId?: string;
+  zoneName?: string;
+  type?: SpotType;
+  status?: ReservationStatus;
+  from?: string;
+  to?: string;
+  userIds?: string[];
+}
+
+// Item ritornato dall'endpoint /admin/users (lista per il MultiSelect filtro
+// "Utenti" della pagina admin). Senza paginazione: per MVP la lista è piccola.
+export interface AdminUserItem {
+  id: string;
+  email: string;
+  displayName: string;
 }
 
 // Helper per chiamate al BFF (`/api/proxy/...`).
@@ -112,4 +152,20 @@ export const api = {
     const q = qs.toString();
     return call<MyReservation[]>(`/reservations/me${q ? `?${q}` : ""}`);
   },
+  listAdminReservations: (params: AdminReservationsQuery) => {
+    const qs = new URLSearchParams();
+    if (params.siteId) qs.set("siteId", params.siteId);
+    if (params.floorId) qs.set("floorId", params.floorId);
+    if (params.zoneName) qs.set("zoneName", params.zoneName);
+    if (params.type) qs.set("type", params.type);
+    if (params.status) qs.set("status", params.status);
+    if (params.from) qs.set("from", params.from);
+    if (params.to) qs.set("to", params.to);
+    // userIds è array → `?userIds=a&userIds=b`. Backend lo riceve via Zod
+    // union(string, array) + transform → sempre array.
+    for (const id of params.userIds ?? []) qs.append("userIds", id);
+    const q = qs.toString();
+    return call<AdminReservationsResponse>(`/admin/reservations${q ? `?${q}` : ""}`);
+  },
+  listAdminUsers: () => call<AdminUserItem[]>("/admin/users"),
 };
