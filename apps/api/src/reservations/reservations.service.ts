@@ -34,8 +34,17 @@ export class ReservationsService {
    * INSERT destinata a fallire quando l'utente ha già la prenotazione (caso
    * normale, non race), e dà un messaggio italiano più specifico del 409 generico.
    */
-  async create(userId: string, dto: CreateReservationDto) {
-    const date = parseDateUtc(dto.date);
+  async create(
+    userId: string,
+    dto: CreateReservationDto,
+    opts: { unrestrictedDate?: boolean } = {},
+  ) {
+    // `unrestrictedDate=true` usato dall'admin per inserire prenotazioni nel
+    // passato (es. inserimento storico HR) o oltre `MAX_DAYS_AHEAD`. Le altre
+    // regole business (spot active, vincolo unique user/day/type) restano.
+    const date = opts.unrestrictedDate
+      ? parseDateOnly(dto.date)
+      : parseDateUtc(dto.date);
 
     const spot = await this.prisma.spot.findUnique({
       where: { id: dto.spotId },
@@ -97,12 +106,30 @@ export class ReservationsService {
     }
   }
 
-  async cancel(userId: string, reservationId: string) {
+  /**
+   * Cancella una prenotazione (status → CANCELLED, idempotente).
+   *
+   * - User normale: solo le sue (`userId === r.userId`); altrimenti 404
+   *   (NotFound deliberato per non leakare l'esistenza di reservation altrui).
+   * - Admin (`opts.isAdmin = true`): qualsiasi reservation. Il `userId`
+   *   passato è quello dell'admin chiamante, usato solo per audit/debug
+   *   (non per il check di permesso).
+   */
+  async cancel(
+    userId: string,
+    reservationId: string,
+    opts: { isAdmin?: boolean } = {},
+  ) {
     const r = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
       select: { id: true, userId: true, status: true },
     });
-    if (!r || r.userId !== userId) throw new NotFoundException("prenotazione non trovata");
+    if (!r) throw new NotFoundException("prenotazione non trovata");
+    if (!opts.isAdmin && r.userId !== userId) {
+      // 404 anche qui (non 403): non vogliamo che un user sappia se un ID
+      // esiste, sia perché non è suo, sia perché non esiste.
+      throw new NotFoundException("prenotazione non trovata");
+    }
     if (r.status === "CANCELLED") return { id: r.id, status: r.status };
 
     return this.prisma.reservation.update({

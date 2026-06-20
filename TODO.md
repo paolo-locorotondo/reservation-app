@@ -85,10 +85,10 @@ Mappatura target a tre livelli:
 | `MANAGER` (nuovo, bloccato da Q1) | Sé + i propri riporti | Sé + i propri riporti | Sé + i propri riporti |
 | `ADMIN` / `HR` (oggi promosso da ADMIN_EMAILS) | Tutti | Tutti | Tutti |
 
-Tre dimensioni indipendenti che ne discendono:
-- **Visibilità**: già fatta per ADMIN su `/admin/reservations` (read-only). Da estendere a MANAGER con scoping riporti.
-- **Prenotazione per altri**: estendere `POST /reservations` con `userId` opzionale (RolesGuard). Prossimo step.
-- **Cancellazione di altri**: rilassare il check `r.userId !== userId` quando il chiamante è MANAGER (sui riporti) o ADMIN (su tutti). Prossimo step.
+Tre dimensioni indipendenti che ne discendono (stato per ruolo):
+- **Visibilità**: ✅ ADMIN su `/admin/reservations`. Da estendere a MANAGER con scoping riporti.
+- **Prenotazione per altri**: ✅ ADMIN via `POST /admin/reservations` (vedi CHANGELOG 2026-06-20). Da estendere a MANAGER con scoping riporti.
+- **Cancellazione di altri**: ✅ ADMIN via `DELETE /admin/reservations/:id` con flag `isAdmin` nel service. Da estendere a MANAGER con scoping riporti.
 
 #### (C) Eccezioni e parametri dinamici (da progettare)
 
@@ -99,12 +99,13 @@ Cose che oggi non esistono ma che l'amministratore vorrà modificare senza redep
 
 #### Azioni admin (next step concreti, su `/admin/reservations`)
 
-Pronti dopo il commit corrente:
-- **Prenota per conto di un utente** (estensione di B). UX da decidere — vedi conversazione.
-- **Cancella prenotazione di un utente** (estensione di B). Click su riga → modal cancel come oggi su `/my-reservations`.
-- **Blocca giorno** (parte di C). Soluzione "veloce" hack-y senza nuove tabelle (reservation fantoccio per ogni spot del filtro) vs soluzione clean con tabella `Closure`. Da decidere.
+- ✅ **Prenota per conto di un utente** (vedi `CHANGELOG.md` 2026-06-20).
+- ✅ **Cancella prenotazione di un utente** (vedi `CHANGELOG.md` 2026-06-20).
+- ✅ **Override vincoli temporali per admin**: l'admin può prenotare per date nel passato (inserimento storico HR) e oltre `MAX_DAYS_AHEAD`. Implementato via opt `unrestrictedDate` su `SpotsService.list` e `ReservationsService.create` (vedi CHANGELOG 2026-06-20).
+- **Blocca giorno** (parte di C, prossimo step). Soluzione clean con nuova tabella `Closure` `(date, siteId?, spotType?, reason)`. Da progettare lato schema + UI dedicata `/admin/closures`.
 - **Sezione config** parametri DB-level (parte di C, decisione Q3 dice "non ora — env").
 - **Export** CSV / Excel — fase 2, dopo che la pagina vede uso reale.
+- **Notifica utente** quando admin cancella la sua prenotazione: email / in-app. Per ora avviso esplicito nel modal admin "L'utente non riceve notifica". Da rivedere quando l'azienda definirà il canale di notifiche aziendale.
 
 ---
 

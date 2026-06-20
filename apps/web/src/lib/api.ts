@@ -4,6 +4,7 @@ import type {
   SpotType,
   SpotWithAvailability,
   SpotsAvailabilityDay,
+  AdminCreateReservationDto,
   CreateReservationDto,
   Reservation,
   ReservationStatus,
@@ -168,4 +169,24 @@ export const api = {
     return call<AdminReservationsResponse>(`/admin/reservations${q ? `?${q}` : ""}`);
   },
   listAdminUsers: () => call<AdminUserItem[]>("/admin/users"),
+  // Variante admin di `listSpots`: stesso shape, ma il backend bypassa i
+  // vincoli temporali (ammesse date passate e oltre MAX_DAYS_AHEAD).
+  listAdminSpots: (params: { type: SpotType; date: string; siteId?: string; floorId?: string }) => {
+    const qs = new URLSearchParams({ type: params.type, date: params.date });
+    if (params.siteId) qs.set("siteId", params.siteId);
+    if (params.floorId) qs.set("floorId", params.floorId);
+    return call<SpotWithAvailability[]>(`/admin/spots?${qs.toString()}`);
+  },
+  // Admin: prenota per conto di un altro utente. Stessi vincoli di
+  // create utente normale (regole business) + ruolo ADMIN richiesto.
+  adminCreateReservation: (dto: AdminCreateReservationDto) =>
+    call<Reservation>("/admin/reservations", {
+      method: "POST",
+      body: JSON.stringify(dto),
+    }),
+  // Admin: cancella prenotazione di qualsiasi utente.
+  adminCancelReservation: (id: string) =>
+    call<{ id: string; status: "ACTIVE" | "CANCELLED" }>(`/admin/reservations/${id}`, {
+      method: "DELETE",
+    }),
 };

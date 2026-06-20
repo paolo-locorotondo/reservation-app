@@ -289,7 +289,7 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
       : `Filtra per sede, piano, data e/o Zona, poi clicca una riga verde per prenotare ${itemLabel}.`;
 
   return (
-    <main>
+    <main className={`rsv-spot-tab rsv-spot-tab--${type.toLowerCase()}`}>
       <div className="rsv-page-header-row">
         <div>
           <h1 style={{ marginBottom: "0.25rem" }}>{title}</h1>

@@ -273,6 +273,7 @@ export function SpotsCalendar({
               const isFull = info !== undefined && info.available === 0;
               const isAvailable = info !== undefined && info.available > 0;
               const isMine = myReservedDates.has(c.iso);
+              const isToday = c.date!.getTime() === today.getTime();
               // Quando showAvailability=false, la cella è cliccabile per tutto
               // il range valido (non dipende da `info`, che è sempre vuoto).
               const disabled = !inRange || (showAvailability && !info);
@@ -283,6 +284,7 @@ export function SpotsCalendar({
                 isAvailable && "rsv-calendar-day--available",
                 isFull && "rsv-calendar-day--full",
                 isMine && "rsv-calendar-day--mine",
+                isToday && "rsv-calendar-day--today",
               ]
                 .filter(Boolean)
                 .join(" ");

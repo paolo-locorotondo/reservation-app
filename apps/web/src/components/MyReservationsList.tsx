@@ -526,7 +526,7 @@ function ReservationsTab({
     Object.values(colFilters).filter((v) => v && v.length > 0).length;
 
   return (
-    <>
+    <div className={`rsv-spot-tab rsv-spot-tab--${type.toLowerCase()}`}>
       <FiltersPanel summary={filtersSummary} activeCount={filtersActiveCount}>
         <div className="rsv-filter-grid">
           <Select
@@ -800,6 +800,6 @@ function ReservationsTab({
           </>
         )}
       </Modal>
-    </>
+    </div>
   );
 }

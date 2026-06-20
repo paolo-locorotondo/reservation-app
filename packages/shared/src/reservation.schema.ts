@@ -23,6 +23,17 @@ export const CreateReservationSchema = z.object({
 });
 export type CreateReservationDto = z.infer<typeof CreateReservationSchema>;
 
+// Admin: prenota per conto di un altro utente. Stessi campi di create user
+// + `userId` target esplicito. Validato in `AdminReservationsController`,
+// protetto da RolesGuard ADMIN. Riusa `ReservationsService.create()` con
+// un secondo argomento opzionale `actingFor`.
+export const AdminCreateReservationSchema = z.object({
+  userId: z.string().min(1),
+  spotId: z.string().min(1),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
+});
+export type AdminCreateReservationDto = z.infer<typeof AdminCreateReservationSchema>;
+
 export const ReservationsRangeQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

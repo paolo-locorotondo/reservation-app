@@ -105,6 +105,13 @@ export function AdminReservationsCalendar({
   const monthLabel = MONTH_LABEL.format(currentMonth);
   const monthLabelCap = monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1);
 
+  // ISO del giorno corrente, calcolato una sola volta al mount per il
+  // confronto cella-per-cella in render. Inutile useMemo con dep `today`:
+  // un calendar admin che resta aperto a cavallo della mezzanotte è caso
+  // estremo, accettiamo che la classe --today sia stale fino al prossimo
+  // mount/refresh.
+  const todayIsoString = isoFromUtc(todayUtc());
+
   function gotoPrev() {
     setCurrentMonth(
       (m) => new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() - 1, 1)),
@@ -164,11 +171,13 @@ export function AdminReservationsCalendar({
           // fetch capacity è fallita, niente --full.
           const isFull =
             totalCapacity != null && totalCapacity > 0 && count >= totalCapacity;
+          const isToday = c.iso === todayIsoString;
           const classes = [
             "rsv-calendar-day",
             "rsv-admin-calendar-day",
             count > 0 && !isFull && "rsv-admin-calendar-day--has-items",
             isFull && "rsv-admin-calendar-day--full",
+            isToday && "rsv-calendar-day--today",
           ]
             .filter(Boolean)
             .join(" ");

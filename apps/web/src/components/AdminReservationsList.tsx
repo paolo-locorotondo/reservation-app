@@ -27,12 +27,14 @@ import {
   TabPanels,
   TabPanel,
   FilterableMultiSelect,
+  Modal,
 } from "@carbon/react";
 import {
   ArrowsVertical,
   ArrowUp,
   ArrowDown,
   Renew,
+  Add,
 } from "@carbon/icons-react";
 import { Italian } from "flatpickr/dist/l10n/it.js";
 import type { CustomLocale } from "flatpickr/dist/types/locale";
@@ -45,9 +47,12 @@ import {
 } from "@/lib/api";
 import { FiltersPanel } from "./FiltersPanel";
 import { AdminReservationsCalendar } from "./AdminReservationsCalendar";
+import { BookForUserDialog, type BookForUserTarget } from "./BookForUserDialog";
 
 // HEADERS della tabella per-tab. Niente colonna "Tipo": è già discriminata
-// dal Tab attivo.
+// dal Tab attivo. La cancellazione avviene cliccando direttamente la riga
+// (pattern di MyReservationsList) — niente colonna Azioni che peggiorerebbe
+// lo scroll orizzontale già forte con 9 colonne.
 const HEADERS = [
   { key: "date", header: "Data" },
   { key: "user", header: "Utente" },
@@ -225,8 +230,18 @@ function AdminReservationsTab({
   const [limit, setLimit] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
   const [sort, setSort] = useState<SortState>(null);
+
+  // Modal cancellazione: target è la reservation completa (non solo l'id) per
+  // poter mostrare nel modal i dettagli (utente + sede + piano + zona + data).
+  const [cancelTarget, setCancelTarget] = useState<AdminReservation | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+
+  // Dialog "Prenota per utente": target null = chiuso, oggetto = aperto con
+  // tipo (e opzionale data preimpostata).
+  const [bookTarget, setBookTarget] = useState<BookForUserTarget | null>(null);
   // Numero totale di spot del filtro corrente (type + sede + piano + zona).
   // Serve al calendar per evidenziare i giorni "esauriti" (count >= total).
   // null = non ancora caricato (calendar non mostra --full).
@@ -439,8 +454,42 @@ function AdminReservationsTab({
     onSwitchToList();
   }
 
+  async function confirmCancel() {
+    if (!cancelTarget) return;
+    setCancelling(true);
+    try {
+      await api.adminCancelReservation(cancelTarget.id);
+      setSuccessMsg(
+        `Prenotazione di ${cancelTarget.user.displayName} del ${formatDate(
+          cancelTarget.date,
+        )} (${cancelTarget.spot.code}) cancellata.`,
+      );
+      setCancelTarget(null);
+      setReloadTick((t) => t + 1);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "Errore imprevisto";
+      setError(`Cancellazione fallita: ${msg}`);
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  // Apre il dialog "Prenota per utente". Data preimpostata: se i filtri
+  // dateFrom/dateTo coincidono (= giorno singolo), uso quella; altrimenti
+  // lascio il dialog scegliere il default (oggi).
+  function openBookDialog() {
+    const initialDate =
+      dateFrom && dateTo && dateFrom === dateTo ? dateFrom : undefined;
+    setBookTarget({ type, initialDate });
+  }
+
+  function handleBookSuccess() {
+    setSuccessMsg("Prenotazione creata con successo.");
+    setReloadTick((t) => t + 1);
+  }
+
   return (
-    <>
+    <div className={`rsv-spot-tab rsv-spot-tab--${type.toLowerCase()}`}>
       <FiltersPanel summary={filtersSummary} activeCount={filtersActiveCount}>
         {/* Tre righe semantiche di filtri. Ognuna distribuisce i suoi campi a
             larghezza piena con `auto-fit + minmax`: se lo schermo è stretto,
@@ -564,8 +613,30 @@ function AdminReservationsTab({
       </FiltersPanel>
 
       <div
-        style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "0.5rem",
+          marginBottom: "1rem",
+          flexWrap: "wrap",
+        }}
       >
+        {/* Azione "Prenota per utente": visibile solo in vista Lista. In
+            vista Calendario non avrebbe contesto (l'admin sceglie giorno e
+            poi cliccare attiva il flusso normale di switch a Lista). */}
+        {view === "list" ? (
+          <Button
+            kind="tertiary"
+            size="sm"
+            renderIcon={Add}
+            onClick={openBookDialog}
+          >
+            Prenota per utente…
+          </Button>
+        ) : (
+          <span /> // placeholder per mantenere space-between con il Renew
+        )}
         <IconButton
           kind="ghost"
           size="sm"
@@ -590,6 +661,16 @@ function AdminReservationsTab({
           title="Errore"
           subtitle={error}
           onCloseButtonClick={() => setError(null)}
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      {successMsg && (
+        <InlineNotification
+          kind="success"
+          title="Operazione completata"
+          subtitle={successMsg}
+          onCloseButtonClick={() => setSuccessMsg(null)}
           style={{ marginBottom: "1rem" }}
         />
       )}
@@ -676,8 +757,28 @@ function AdminReservationsTab({
                 <TableBody>
                   {rs.map((row) => {
                     const { key: rowKey, ...rowProps } = getRowProps({ row });
+                    // Riusa il pattern di MyReservationsList: click riga →
+                    // modal cancel. Le righe CANCELLED non sono cliccabili
+                    // (niente azione utile e cursor default segnala il
+                    // disabled state).
+                    const reservation = items.find((r) => r.id === row.id);
+                    const isActive = reservation?.status === "ACTIVE";
                     return (
-                      <TableRow key={rowKey} {...rowProps}>
+                      <TableRow
+                        key={rowKey}
+                        {...rowProps}
+                        className={isActive ? "rsv-row-clickable" : undefined}
+                        onClick={
+                          isActive && reservation
+                            ? () => setCancelTarget(reservation)
+                            : undefined
+                        }
+                        title={
+                          isActive
+                            ? "Clicca per cancellare la prenotazione"
+                            : undefined
+                        }
+                      >
                         {row.cells.map((cell) => (
                           <TableCell key={cell.id}>{String(cell.value)}</TableCell>
                         ))}
@@ -690,6 +791,64 @@ function AdminReservationsTab({
           )}
         </DataTable>
       )}
-    </>
+
+      {/* Modal di conferma cancellazione (admin: cancella anche prenotazioni
+          di altri utenti). Mostra contesto completo per evitare cancel
+          accidentali quando l'admin sta lavorando su grandi liste. */}
+      <Modal
+        open={cancelTarget !== null}
+        danger
+        modalHeading="Cancellare la prenotazione?"
+        primaryButtonText={cancelling ? "Cancellazione…" : "Cancella"}
+        secondaryButtonText="Annulla"
+        primaryButtonDisabled={cancelling}
+        onRequestClose={() => {
+          if (!cancelling) setCancelTarget(null);
+        }}
+        onRequestSubmit={confirmCancel}
+      >
+        {cancelTarget && (
+          <>
+            <p>
+              Stai per cancellare la prenotazione{" "}
+              {cancelTarget.spot.type === "PARKING"
+                ? "del posto auto"
+                : "della scrivania"}{" "}
+              <strong>{cancelTarget.spot.code}</strong> per il{" "}
+              <strong>{formatDate(cancelTarget.date)}</strong>.
+            </p>
+            <ul style={{ margin: "0.75rem 0", paddingLeft: "1.25rem" }}>
+              <li>
+                Utente:{" "}
+                <strong>
+                  {cancelTarget.user.displayName} ({cancelTarget.user.email})
+                </strong>
+              </li>
+              <li>
+                Sede: <strong>{cancelTarget.spot.floor.site.name}</strong>
+              </li>
+              <li>
+                Piano: <strong>{cancelTarget.spot.floor.name}</strong>
+              </li>
+              {cancelTarget.spot.zone && (
+                <li>
+                  Zona: <strong>{cancelTarget.spot.zone.name}</strong>
+                </li>
+              )}
+            </ul>
+            <p>
+              L&apos;operazione è immediata. L&apos;utente non riceve notifica.
+            </p>
+          </>
+        )}
+      </Modal>
+
+      <BookForUserDialog
+        target={bookTarget}
+        users={users}
+        onClose={() => setBookTarget(null)}
+        onSuccess={handleBookSuccess}
+      />
+    </div>
   );
 }

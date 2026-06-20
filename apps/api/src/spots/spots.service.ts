@@ -16,9 +16,15 @@ export class SpotsService {
    * Lista spot del tipo richiesto con flag `available` per la data.
    * Una sola query per gli spot, una per le prenotazioni ACTIVE del giorno → join in memoria.
    * La data è interpretata come giorno civile UTC (colonna @db.Date).
+   *
+   * `opts.unrestrictedDate=true`: bypassa il check `>= today` e `<= today + N`
+   * (usato dall'endpoint admin per popolare il dialog "Prenota per utente"
+   * anche su date storiche).
    */
-  async list(q: SpotsQuery) {
-    const date = parseDateUtc(q.date);
+  async list(q: SpotsQuery, opts: { unrestrictedDate?: boolean } = {}) {
+    const date = opts.unrestrictedDate
+      ? parseDateOnly(q.date)
+      : parseDateUtc(q.date);
 
     const where: Prisma.SpotWhereInput = {
       type: q.type,
@@ -151,5 +157,18 @@ function parseDateUtc(yyyyMmDd: string): Date {
   const diffDays = Math.floor((date.getTime() - todayUtc.getTime()) / 86_400_000);
   if (diffDays < 0) throw new BadRequestException("data nel passato");
   if (diffDays > MAX_DAYS_AHEAD) throw new BadRequestException(`data oltre i ${MAX_DAYS_AHEAD} giorni consentiti`);
+  return date;
+}
+
+// Variante senza vincoli temporali (usata dagli endpoint admin per ricerca
+// storica). Solo parsing del formato YYYY-MM-DD. Stessa shape di
+// `reservations.service.ts` — duplicato per ora, candidato a refactor in
+// `common/dates.ts` quando uno dei due cresce.
+function parseDateOnly(yyyyMmDd: string): Date {
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (Number.isNaN(date.getTime())) {
+    throw new BadRequestException("data non valida");
+  }
   return date;
 }

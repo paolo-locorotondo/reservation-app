@@ -2,6 +2,74 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-20 — Rifiniture varie: prenota-per-utente, tab colorati, cerchio "oggi"
+
+Quattro rifiniture a valle dei round su /admin/reservations + un dettaglio UX trasversale ai calendari.
+
+- **Atterraggio per ruolo dopo login** ([`apps/web/src/app/page.tsx`](apps/web/src/app/page.tsx)): il redirect post-login distingue `ADMIN` → `/admin/reservations` (panoramica admin) vs `USER` → `/my-reservations` (dashboard personale). Prima `USER` veniva mandato a `/parking`, ma "Le mie prenotazioni" è il punto di partenza più sensato: l'utente vede subito il proprio stato e da lì decide se prenotare nuovo (link "Prenota qui i posti auto / la tua scrivania" già presenti sopra i tab). Le altre voci nav restano comunque tutte raggiungibili.
+
+- **Cerchio "oggi" in tutti i calendari** ([`globals.scss`](apps/web/src/styles/globals.scss), [`SpotsCalendar.tsx`](apps/web/src/components/SpotsCalendar.tsx), [`AdminReservationsCalendar.tsx`](apps/web/src/components/AdminReservationsCalendar.tsx)): pattern Google Calendar — il numero del giorno corrente è dentro un cerchietto Carbon gray-70 con testo bianco bold. Coesiste senza override con tutti gli stati (`--available`, `--full`, `--mine`, `--has-items`, `--disabled`) perché lo stile è applicato solo al `<span>` del numero, non al background della cella. Itinerario di scelta: scartato sfondo blu chiaro (collideva con `--has-items` admin), scartato outline cella (creava bordi doppi con `--mine`), scelto il cerchio per affidabilità cromatica e familiarità. Su mobile il cerchio si riduce a 1.25rem per non occupare troppo spazio.
+
+- **ComboBox per il campo "Posto" nel `BookForUserDialog`** ([`BookForUserDialog.tsx`](apps/web/src/components/BookForUserDialog.tsx)): sostituito il `Select` con `ComboBox` (typeahead + dropdown scrollabile, stesso pattern del filtro Utente). Per dataset >50 spot lo scroll cieco era ingestibile; ora l'admin digita "P-15" o "Zona Nord" e la lista si filtra in tempo reale.
+
+- **Admin bypassa i vincoli temporali** (per inserimento storico HR / pianificazione lunga). Aggiunto opt `unrestrictedDate` a [`SpotsService.list`](apps/api/src/spots/spots.service.ts) e [`ReservationsService.create`](apps/api/src/reservations/reservations.service.ts): quando `true` usa `parseDateOnly` (solo formato) invece di `parseDateUtc` (range `[oggi, oggi+MAX_DAYS_AHEAD]`).
+  - Nuovo endpoint [`GET /admin/spots`](apps/api/src/spots/admin-spots.controller.ts) con `RolesGuard ADMIN` che chiama `SpotsService.list(q, { unrestrictedDate: true })`.
+  - [`AdminReservationsController.create`](apps/api/src/reservations/admin-reservations.controller.ts) passa `{ unrestrictedDate: true }` a `reservations.create`.
+  - Frontend [`api.listAdminSpots`](apps/web/src/lib/api.ts) usato dal dialog al posto del `listSpots` user; rimosso `minDate` dal DatePicker del dialog.
+  - Vincoli che restano validi anche per admin: spot deve essere `active`, vincolo unique `(userId, date, spotType)` ACTIVE (regole DB-enforced del `CHANGELOG.md`).
+
+- **Sfondo distintivo per tipo posto** in **tutte** le pagine che hanno un "tipo" (`/parking`, `/desks`, `/admin/reservations`, `/my-reservations`) — [`AdminReservationsList.tsx`](apps/web/src/components/AdminReservationsList.tsx), [`MyReservationsList.tsx`](apps/web/src/components/MyReservationsList.tsx), [`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx), [`globals.scss`](apps/web/src/styles/globals.scss). Classe `rsv-spot-tab rsv-spot-tab--{type}` su ogni wrapper (Tab content per le pagine multitipo, `<main>` per `/parking` e `/desks` che sono pagine singole). Coerenza visuale across navigation: l'utente che clicca un giorno nel calendar di `/my-reservations` viene rimandato a `/parking?date=...` e ritrova lo stesso lavender — "stessa famiglia".
+  - **`--parking`**: Carbon purple-20 `#e8daff` (lavender, "veicolo"). Iniziale `purple-10` era troppo chiaro per emergere dalla pagina bianca.
+  - **`--desk`**: Carbon yellow-10 `#fcf4d6` (caldo, "wood/scrivania")
+  - Entrambi distintivi dagli stati semantici dei calendar (verde `--available`, rosso `--full`, blu `--has-items`) e fra di loro.
+  - Il colore si vede come **cornice** attorno al contenuto: il calendar ha celle bianche, la DataTable righe bianche. Padding generoso (1.5rem) lo rende abbastanza presente senza invadere l'area di contenuto.
+
+## 2026-06-20 — Admin: azioni "Prenota per utente" e "Cancella prenotazione altrui"
+
+Estesa la pagina `/admin/reservations` con due azioni sulle prenotazioni di altri utenti, mantenendo invariate le 11 regole business (vincolo unique user/day/type, range data, spot active). UX scelta: bottoni nella vista Lista (no menu contestuale al click giorno) — pattern consolidato del progetto, niente layer aggiuntivi.
+
+### Backend
+- **Schema** [`AdminCreateReservationSchema`](packages/shared/src/reservation.schema.ts) (Zod): `{ userId, spotId, date }`. Validato in `AdminReservationsController`, protetto da `RolesGuard ADMIN`.
+- **Service** [`ReservationsService.cancel`](apps/api/src/reservations/reservations.service.ts): firma estesa con terzo parametro `opts: { isAdmin?: boolean }`. Quando `isAdmin=true` il check `r.userId !== userId` viene bypassato; il `userId` passato è quello dell'admin chiamante (utile per audit, non per il permesso). Mantenuto 404 NotFound su id inesistente per non leakare informazioni.
+- **Service** [`ReservationsService.create`](apps/api/src/reservations/reservations.service.ts): nessuna modifica — già accetta `userId` esplicito come primo argomento. L'admin chiama con `userId` target.
+- **Controller** [`AdminReservationsController`](apps/api/src/reservations/admin-reservations.controller.ts): 
+  - `POST /admin/reservations` → `reservations.create(dto.userId, { spotId, date })` (riusa la stessa logica di create user normale).
+  - `DELETE /admin/reservations/:id` → `reservations.cancel(admin.id, id, { isAdmin: true })`.
+  - Iniettato anche `UsersService` per risolvere l'admin chiamante dal token.
+
+### Frontend
+- **API client** ([`api.ts`](apps/web/src/lib/api.ts)): `adminCreateReservation(dto)` e `adminCancelReservation(id)`.
+- **`BookForUserDialog`** ([nuovo file](apps/web/src/components/BookForUserDialog.tsx)): Carbon `Modal` con form a 5 campi:
+  - Utente (Carbon `ComboBox` single-select, typeahead client-side sul dataset preloaded)
+  - Sede (Select, popolata da `listSites`)
+  - Piano (Select, dipende da Sede via `listFloors`)
+  - Data (DatePicker, preimpostata se l'admin arriva da click su un giorno del calendar)
+  - Posto (Select, popolato da `listSpots(date, sede, piano, type)` filtrato `available=true`; etichetta `"<code> — <zona>"`)
+  - Tipo: preimpostato dal Tab corrente (PARKING/DESK), mostrato nel titolo del modal.
+  - Cleanup guard sul fetch spots, banner "Nessun posto disponibile" se la combinazione filtri non lascia spot prenotabili.
+- **`AdminReservationsList`** ([modificato](apps/web/src/components/AdminReservationsList.tsx)):
+  - Toolbar passata da `flex-end` a `space-between`: bottone `<Add /> Prenota per utente…` (Carbon tertiary) a sinistra **visibile solo in vista Lista**, IconButton `Renew` a destra (invariato).
+  - Click "Prenota per utente…" → apre `BookForUserDialog` con `type` corrente. Se i filtri Da/A coincidono su un singolo giorno, quella data è preimpostata.
+  - **Cancellazione via click sulla riga** (pattern `MyReservationsList`): le righe `ACTIVE` hanno classe `.rsv-row-clickable` + tooltip "Clicca per cancellare la prenotazione" → modal cancel. Le `CANCELLED` non sono cliccabili (cursor default, no hover). Scartata l'idea di una colonna "Azioni" con `IconButton TrashCan`: con 9 colonne già esistenti la nuova colonna finiva fuori dal viewport e richiedeva scroll orizzontale.
+  - Modal di cancellazione mostra contesto completo (utente + sede + piano + zona + codice + data) per evitare cancel accidentali su grandi liste. Submit → `adminCancelReservation` → toast successo + reload.
+  - Banner success unificato per entrambe le azioni: "Prenotazione creata con successo." / "Prenotazione di {utente} del {data} ({codice}) cancellata."
+
+### File toccati / creati
+
+**Modificati**:
+- `packages/shared/src/reservation.schema.ts`
+- `apps/api/src/reservations/reservations.service.ts`
+- `apps/api/src/reservations/admin-reservations.controller.ts`
+- `apps/web/src/lib/api.ts`
+- `apps/web/src/components/AdminReservationsList.tsx`
+
+**Creato**:
+- `apps/web/src/components/BookForUserDialog.tsx`
+
+### Limiti accettati
+- L'admin che cancella una prenotazione di un altro utente **non manda notifica all'utente** (no email, no in-app). Aggiunto avviso esplicito nel modal: "L'operazione è immediata. L'utente non riceve notifica.". Quando arriverà il sistema di notifiche aziendale, riconsidereremo.
+- "Prenota per utente" applica le stesse regole di un user normale: l'admin **non può** creare prenotazioni nel passato o oltre `MAX_DAYS_AHEAD`. Non c'è un override esplicito perché casi d'uso reali (es. inserimento storico per HR) sono ancora da capire.
+
 ## 2026-06-19 — Pagina Admin `/admin/reservations` (read-only, in stile `/my-reservations`)
 
 Implementato il **primo step** della "Pagina Admin / HR / Manager" del TODO. La spike Entra ID (Q1 — ruoli/riporti) resta aperta in attesa di confronto con HR; partiamo intanto dalla **sola visibilità** con il binario `USER`/`ADMIN` già in vigore. Niente azioni (cancel di altri / create-for-others), niente `MANAGER` con scoping riporti — sono i prossimi incrementi.

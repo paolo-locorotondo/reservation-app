@@ -7,10 +7,15 @@ import { authOptions } from "@/lib/auth";
 export default async function Home() {
   const session = await getServerSession(authOptions);
   if (session) {
-    // Gli admin atterrano direttamente sulla pagina di amministrazione, gli
-    // altri sul booking. Le voci nav restano comunque tutte raggiungibili,
-    // questo è solo l'atterraggio "primo accesso" più sensato per ruolo.
-    redirect(session.user?.role === "ADMIN" ? "/admin/reservations" : "/parking");
+    // Atterraggio per ruolo:
+    //   ADMIN → pagina di amministrazione (panoramica del sistema)
+    //   USER  → "Le mie prenotazioni" (dashboard naturale: vede subito le sue
+    //           prenotazioni attive e da lì decide se prenotare nuove via
+    //           "Prenota qui i posti auto / la tua scrivania")
+    // Le altre voci nav restano comunque tutte raggiungibili.
+    redirect(
+      session.user?.role === "ADMIN" ? "/admin/reservations" : "/my-reservations",
+    );
   }
 
   return (

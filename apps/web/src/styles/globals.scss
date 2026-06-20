@@ -60,6 +60,33 @@ main {
   }
 }
 
+// Wrapper del contenuto di un tab Posti auto / Scrivanie. Usato in
+// /admin/reservations e /my-reservations per dare un colore di sfondo
+// distintivo a ciascun tipo: aiuta a capire a colpo d'occhio dove si è
+// senza dover guardare la tab bar.
+//
+// NB: il colore del wrapper si vede SOLO come cornice attorno al contenuto,
+// perché le celle del calendar e le righe della DataTable hanno bg bianco
+// che copre l'area interna. Per dare alla cornice abbastanza presenza
+// visuale serve padding generoso (1.5rem) e tinte non troppo sbiadite.
+//
+// Colori:
+//   - parking → purple-20 (purple-10 era troppo chiaro per essere visibile
+//                          come cornice — meno saturo di yellow-10)
+//   - desk    → yellow-10 (caldo, "wood/scrivania")
+// Entrambi sono distintivi dagli stati semantici dei calendar
+// (verde --available, rosso --full, blu --has-items) e fra di loro.
+.rsv-spot-tab {
+  padding: 1.5rem;
+  border-radius: 4px;
+}
+.rsv-spot-tab--parking {
+  background-color: #e8daff; // Carbon purple-20
+}
+.rsv-spot-tab--desk {
+  background-color: #fcf4d6; // Carbon yellow-10
+}
+
 // Layout filtri admin organizzato in righe semantiche esplicite (Sede/Piano/Zona,
 // Stato/Da/A, Utenti). Ogni `.rsv-filter-row` distribuisce i suoi campi a piena
 // larghezza con `auto-fit + minmax(200px, 1fr)`: se lo schermo non basta a
@@ -525,6 +552,31 @@ main {
 .rsv-calendar-day--pad {
   visibility: hidden;
   cursor: default;
+}
+// Evidenziazione del giorno corrente: cerchio attorno al numero (pattern
+// Google Calendar). Non tocca il background della cella quindi coesiste
+// senza collisioni con --available, --full, --has-items, --mine, --disabled.
+//
+// Colore Carbon gray-70 (non blue-60 come --mine): "oggi" è informazione
+// passiva, non azione. Il grigio scuro distingue chiaramente da "mia
+// prenotazione" (blu) e dagli stati semantici (verde disponibile / rosso
+// pieno) senza chiedere attenzione esagerata.
+.rsv-calendar-day--today > .rsv-calendar-day-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background-color: #525252; // Carbon gray-70
+  color: #ffffff;
+  font-weight: 600;
+}
+@media (max-width: 671px) {
+  .rsv-calendar-day--today > .rsv-calendar-day-number {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
 }
 .rsv-calendar-day--disabled {
   background: #f4f4f4;
