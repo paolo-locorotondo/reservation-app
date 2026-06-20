@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -19,8 +20,10 @@ import { ZodValidationPipe } from "../common/zod-validation.pipe";
 import {
   AdminCreateReservationSchema,
   AdminReservationsQuerySchema,
+  AdminUpdateReservationSchema,
   type AdminCreateReservationDto,
   type AdminReservationsQuery,
+  type AdminUpdateReservationDto,
 } from "@reservation/shared";
 import { UsersService } from "../users/users.service";
 import { ReservationsService } from "./reservations.service";
@@ -59,6 +62,19 @@ export class AdminReservationsController {
       { spotId: dto.spotId, date: dto.date },
       { unrestrictedDate: true },
     );
+  }
+
+  // Trasferisce una prenotazione attiva a un altro utente (cambio intestatario).
+  // Solo `userId` è modificabile: data/spot/tipo restano invariati. Il vincolo
+  // unique partial `(userId, date, spotType) WHERE active` protegge dal caso
+  // "il nuovo utente ha già una prenotazione per quel giorno e tipo".
+  @Patch(":id")
+  update(
+    @Param("id") id: string,
+    @Body(new ZodValidationPipe(AdminUpdateReservationSchema))
+    dto: AdminUpdateReservationDto,
+  ) {
+    return this.reservations.adminUpdate(id, dto.userId);
   }
 
   // Cancella prenotazione di qualsiasi utente. Il check `r.userId !== userId`

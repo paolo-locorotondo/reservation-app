@@ -27,6 +27,7 @@ import {
   TabPanels,
   TabPanel,
   FilterableMultiSelect,
+  ComboBox,
   Modal,
 } from "@carbon/react";
 import {
@@ -234,10 +235,21 @@ function AdminReservationsTab({
   const [reloadTick, setReloadTick] = useState(0);
   const [sort, setSort] = useState<SortState>(null);
 
-  // Modal cancellazione: target è la reservation completa (non solo l'id) per
-  // poter mostrare nel modal i dettagli (utente + sede + piano + zona + data).
-  const [cancelTarget, setCancelTarget] = useState<AdminReservation | null>(null);
-  const [cancelling, setCancelling] = useState(false);
+  // Modal di gestione prenotazione (cancella + cambio intestatario):
+  //  - `manageTarget` è la reservation completa (per i dettagli nel modal).
+  //  - `editUserId` segna la modalità "cambio utente":
+  //    * null  → modale in stato "Cancella" (default all'apertura)
+  //    * uguale a `manageTarget.user.id` → admin ha cliccato "Cambia utente"
+  //      ma non ha ancora scelto un nome diverso → resta "Cancella"
+  //    * valore diverso da `manageTarget.user.id` → "Aggiorna" arancione
+  const [manageTarget, setManageTarget] = useState<AdminReservation | null>(null);
+  const [editUserId, setEditUserId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  // Errore mostrato DENTRO al modale di gestione. Necessario perché il caso
+  // "il nuovo utente ha già una prenotazione per quel giorno+tipo" (P2002 →
+  // 409) è frequente e va visto col modale aperto. La InlineNotification
+  // sopra la tabella sarebbe nascosta dietro l'overlay del Modal.
+  const [manageError, setManageError] = useState<string | null>(null);
 
   // Dialog "Prenota per utente": target null = chiuso, oggetto = aperto con
   // tipo (e opzionale data preimpostata).
@@ -454,23 +466,55 @@ function AdminReservationsTab({
     onSwitchToList();
   }
 
-  async function confirmCancel() {
-    if (!cancelTarget) return;
-    setCancelling(true);
+  // Decide quale azione partire dal bottone primary del modal: aggiorna
+  // (transfer a un altro utente) se l'admin ha selezionato un utente diverso
+  // dall'attuale, altrimenti cancella la prenotazione.
+  const isUpdate =
+    manageTarget !== null &&
+    editUserId !== null &&
+    editUserId !== manageTarget.user.id;
+
+  function closeManageModal() {
+    if (submitting) return;
+    setManageTarget(null);
+    setEditUserId(null);
+    setManageError(null);
+  }
+
+  async function confirmManage() {
+    if (!manageTarget) return;
+    setSubmitting(true);
+    setManageError(null);
     try {
-      await api.adminCancelReservation(cancelTarget.id);
-      setSuccessMsg(
-        `Prenotazione di ${cancelTarget.user.displayName} del ${formatDate(
-          cancelTarget.date,
-        )} (${cancelTarget.spot.code}) cancellata.`,
-      );
-      setCancelTarget(null);
+      if (isUpdate && editUserId) {
+        await api.adminUpdateReservation(manageTarget.id, editUserId);
+        const newUser = users.find((u) => u.id === editUserId);
+        const newUserLabel = newUser
+          ? `${newUser.displayName} (${newUser.email})`
+          : "nuovo utente";
+        setSuccessMsg(
+          `Prenotazione del ${formatDate(manageTarget.date)} (${manageTarget.spot.code}) trasferita da ${manageTarget.user.displayName} a ${newUserLabel}.`,
+        );
+      } else {
+        await api.adminCancelReservation(manageTarget.id);
+        setSuccessMsg(
+          `Prenotazione di ${manageTarget.user.displayName} del ${formatDate(
+            manageTarget.date,
+          )} (${manageTarget.spot.code}) cancellata.`,
+        );
+      }
+      setManageTarget(null);
+      setEditUserId(null);
       setReloadTick((t) => t + 1);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Errore imprevisto";
-      setError(`Cancellazione fallita: ${msg}`);
+      // Mostriamo l'errore DENTRO al modale, non come InlineNotification sopra
+      // la tabella (sarebbe nascosta dietro l'overlay). Lasciamo aperto il
+      // modale così l'admin può correggere la selezione utente e ritentare,
+      // o annullare.
+      setManageError(`${isUpdate ? "Aggiornamento" : "Cancellazione"} fallit${isUpdate ? "o" : "a"}: ${msg}`);
     } finally {
-      setCancelling(false);
+      setSubmitting(false);
     }
   }
 
@@ -758,9 +802,9 @@ function AdminReservationsTab({
                   {rs.map((row) => {
                     const { key: rowKey, ...rowProps } = getRowProps({ row });
                     // Riusa il pattern di MyReservationsList: click riga →
-                    // modal cancel. Le righe CANCELLED non sono cliccabili
-                    // (niente azione utile e cursor default segnala il
-                    // disabled state).
+                    // modal di gestione (cancella + cambio intestatario).
+                    // Le righe CANCELLED non sono cliccabili (niente azione
+                    // utile e cursor default segnala il disabled state).
                     const reservation = items.find((r) => r.id === row.id);
                     const isActive = reservation?.status === "ACTIVE";
                     return (
@@ -770,12 +814,15 @@ function AdminReservationsTab({
                         className={isActive ? "rsv-row-clickable" : undefined}
                         onClick={
                           isActive && reservation
-                            ? () => setCancelTarget(reservation)
+                            ? () => {
+                                setManageTarget(reservation);
+                                setEditUserId(null);
+                              }
                             : undefined
                         }
                         title={
                           isActive
-                            ? "Clicca per cancellare la prenotazione"
+                            ? "Clicca per gestire la prenotazione"
                             : undefined
                         }
                       >
@@ -792,52 +839,127 @@ function AdminReservationsTab({
         </DataTable>
       )}
 
-      {/* Modal di conferma cancellazione (admin: cancella anche prenotazioni
-          di altri utenti). Mostra contesto completo per evitare cancel
-          accidentali quando l'admin sta lavorando su grandi liste. */}
+      {/* Modal di gestione prenotazione (admin): due azioni mutuamente
+          esclusive nello stesso modale.
+          - Default: bottone rosso "Cancella" (semantica primaria del modale).
+          - Click "Cambia utente" → ComboBox preselezionato sull'utente
+            attuale; quando l'admin sceglie un nome diverso, il bottone si
+            trasforma in "Aggiorna" arancione (classe `rsv-modal-update` →
+            override Carbon orange-50). Se l'admin riseleziona se stesso o
+            cancella la selezione, il bottone torna a "Cancella" rosso.
+          Mostra contesto completo per evitare azioni accidentali su grandi
+          liste. */}
       <Modal
-        open={cancelTarget !== null}
-        danger
-        modalHeading="Cancellare la prenotazione?"
-        primaryButtonText={cancelling ? "Cancellazione…" : "Cancella"}
+        open={manageTarget !== null}
+        danger={!isUpdate}
+        className={isUpdate ? "rsv-modal-update" : undefined}
+        modalHeading={isUpdate ? "Aggiornare la prenotazione?" : "Cancellare la prenotazione?"}
+        primaryButtonText={
+          submitting
+            ? isUpdate
+              ? "Aggiornamento…"
+              : "Cancellazione…"
+            : isUpdate
+              ? "Aggiorna"
+              : "Cancella"
+        }
         secondaryButtonText="Annulla"
-        primaryButtonDisabled={cancelling}
-        onRequestClose={() => {
-          if (!cancelling) setCancelTarget(null);
-        }}
-        onRequestSubmit={confirmCancel}
+        primaryButtonDisabled={submitting}
+        onRequestClose={closeManageModal}
+        onRequestSubmit={confirmManage}
       >
-        {cancelTarget && (
+        {manageTarget && (
           <>
+            {manageError && (
+              <InlineNotification
+                kind="error"
+                title="Errore"
+                subtitle={manageError}
+                onCloseButtonClick={() => setManageError(null)}
+                lowContrast
+                style={{ marginBottom: "1rem", maxWidth: "none" }}
+              />
+            )}
             <p>
-              Stai per cancellare la prenotazione{" "}
-              {cancelTarget.spot.type === "PARKING"
+              {isUpdate ? "Stai per trasferire" : "Stai per cancellare"} la prenotazione{" "}
+              {manageTarget.spot.type === "PARKING"
                 ? "del posto auto"
                 : "della scrivania"}{" "}
-              <strong>{cancelTarget.spot.code}</strong> per il{" "}
-              <strong>{formatDate(cancelTarget.date)}</strong>.
+              <strong>{manageTarget.spot.code}</strong> per il{" "}
+              <strong>{formatDate(manageTarget.date)}</strong>.
             </p>
+
+            {/* Riga utente: in stato "non in modifica" mostra il nome corrente
+                + bottone "Cambia utente"; in stato "modifica" sostituisce con
+                un ComboBox preselezionato sull'utente attuale. */}
+            <div style={{ margin: "0.75rem 0" }}>
+              {editUserId === null ? (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span>
+                    Utente:{" "}
+                    <strong>
+                      {manageTarget.user.displayName} ({manageTarget.user.email})
+                    </strong>
+                  </span>
+                  <Button
+                    kind="ghost"
+                    size="sm"
+                    onClick={() => setEditUserId(manageTarget.user.id)}
+                    disabled={submitting}
+                  >
+                    Cambia utente
+                  </Button>
+                </div>
+              ) : (
+                <ComboBox
+                  id="manage-edit-user"
+                  titleText="Nuovo utente"
+                  placeholder="Cerca utente…"
+                  items={users}
+                  itemToString={(u: AdminUserItem | null) =>
+                    u ? `${u.displayName} (${u.email})` : ""
+                  }
+                  selectedItem={users.find((u) => u.id === editUserId) ?? null}
+                  onChange={({
+                    selectedItem,
+                  }: {
+                    selectedItem: AdminUserItem | null | undefined;
+                  }) => {
+                    setEditUserId(selectedItem?.id ?? null);
+                    // Cambio utente → l'errore precedente potrebbe non essere
+                    // più rilevante (es. l'admin ha appena corretto un
+                    // conflict). Resettiamo per evitare confusione.
+                    setManageError(null);
+                  }}
+                  disabled={submitting}
+                />
+              )}
+            </div>
+
             <ul style={{ margin: "0.75rem 0", paddingLeft: "1.25rem" }}>
               <li>
-                Utente:{" "}
-                <strong>
-                  {cancelTarget.user.displayName} ({cancelTarget.user.email})
-                </strong>
+                Sede: <strong>{manageTarget.spot.floor.site.name}</strong>
               </li>
               <li>
-                Sede: <strong>{cancelTarget.spot.floor.site.name}</strong>
+                Piano: <strong>{manageTarget.spot.floor.name}</strong>
               </li>
-              <li>
-                Piano: <strong>{cancelTarget.spot.floor.name}</strong>
-              </li>
-              {cancelTarget.spot.zone && (
+              {manageTarget.spot.zone && (
                 <li>
-                  Zona: <strong>{cancelTarget.spot.zone.name}</strong>
+                  Zona: <strong>{manageTarget.spot.zone.name}</strong>
                 </li>
               )}
             </ul>
             <p>
-              L&apos;operazione è immediata. L&apos;utente non riceve notifica.
+              {isUpdate
+                ? "L'operazione è immediata. Né il vecchio né il nuovo intestatario ricevono notifica."
+                : "L'operazione è immediata. L'utente non riceve notifica."}
             </p>
           </>
         )}

@@ -4,7 +4,12 @@ Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci
 
 ## 2026-06-20 — Rifiniture varie: prenota-per-utente, tab colorati, cerchio "oggi"
 
-Quattro rifiniture a valle dei round su /admin/reservations + un dettaglio UX trasversale ai calendari.
+Rifiniture a valle dei round su /admin/reservations + dettagli UX trasversali a tutta l'app.
+
+- **Trasferimento prenotazione admin** (cambio intestatario): nuovo endpoint [`PATCH /admin/reservations/:id`](apps/api/src/reservations/admin-reservations.controller.ts) con body `{ userId }` → [`ReservationsService.adminUpdate`](apps/api/src/reservations/reservations.service.ts) (atomico: una sola `prisma.update`, niente cancel+create). Il vincolo unique partial `(userId, date, spotType) WHERE active` protegge: se il nuovo utente ha già una prenotazione per stesso giorno+tipo, P2002 → 409 con messaggio italiano. Schema [`AdminUpdateReservationSchema`](packages/shared/src/reservation.schema.ts).
+  - Frontend: il modale che prima era solo "Cancella" diventa modale **di gestione**. Default identico a prima (bottone rosso "Cancella"); l'admin clicca "Cambia utente" inline accanto al nome → ComboBox preselezionato sull'utente attuale; quando seleziona un nome diverso il bottone si trasforma in arancione "Aggiorna" (Carbon orange-50 `#ff832b` via classe `.rsv-modal-update`, vedi [`globals.scss`](apps/web/src/styles/globals.scss); Carbon non ha un kind nativo "warning" per Button). Se riseleziona se stesso o cancella la selezione → torna a "Cancella" rosso. Niente form a parte: stesso modale, stessa entry-point (click riga ACTIVE).
+  - API client [`api.adminUpdateReservation(id, userId)`](apps/web/src/lib/api.ts).
+  - Use case: errori di intestazione, scambio posto fra colleghi, cessione prenotazione last-minute. Mantiene `id`, `createdAt`, audit della riga (cambia solo `userId` e `updatedAt`).
 
 - **Atterraggio per ruolo dopo login** ([`apps/web/src/app/page.tsx`](apps/web/src/app/page.tsx)): il redirect post-login distingue `ADMIN` → `/admin/reservations` (panoramica admin) vs `USER` → `/my-reservations` (dashboard personale). Prima `USER` veniva mandato a `/parking`, ma "Le mie prenotazioni" è il punto di partenza più sensato: l'utente vede subito il proprio stato e da lì decide se prenotare nuovo (link "Prenota qui i posti auto / la tua scrivania" già presenti sopra i tab). Le altre voci nav restano comunque tutte raggiungibili.
 

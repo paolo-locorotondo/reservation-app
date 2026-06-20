@@ -184,6 +184,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(dto),
     }),
+  // Admin: trasferisce una prenotazione attiva a un altro utente (cambio
+  // intestatario). Cambia solo `userId`: data/spot/tipo restano invariati.
+  // 409 se il nuovo utente ha già una prenotazione per stesso giorno+tipo.
+  adminUpdateReservation: (id: string, userId: string) =>
+    call<Reservation>(`/admin/reservations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ userId }),
+    }),
   // Admin: cancella prenotazione di qualsiasi utente.
   adminCancelReservation: (id: string) =>
     call<{ id: string; status: "ACTIVE" | "CANCELLED" }>(`/admin/reservations/${id}`, {

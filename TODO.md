@@ -101,6 +101,7 @@ Cose che oggi non esistono ma che l'amministratore vorrà modificare senza redep
 
 - ✅ **Prenota per conto di un utente** (vedi `CHANGELOG.md` 2026-06-20).
 - ✅ **Cancella prenotazione di un utente** (vedi `CHANGELOG.md` 2026-06-20).
+- ✅ **Trasferisci prenotazione (cambio intestatario)** (vedi `CHANGELOG.md` 2026-06-20): atomico via `PATCH /admin/reservations/:id`, riuso dello stesso modale di cancel.
 - ✅ **Override vincoli temporali per admin**: l'admin può prenotare per date nel passato (inserimento storico HR) e oltre `MAX_DAYS_AHEAD`. Implementato via opt `unrestrictedDate` su `SpotsService.list` e `ReservationsService.create` (vedi CHANGELOG 2026-06-20).
 - **Blocca giorno** (parte di C, prossimo step). Soluzione clean con nuova tabella `Closure` `(date, siteId?, spotType?, reason)`. Da progettare lato schema + UI dedicata `/admin/closures`.
 - **Sezione config** parametri DB-level (parte di C, decisione Q3 dice "non ora — env").

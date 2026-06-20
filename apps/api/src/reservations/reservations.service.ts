@@ -140,6 +140,58 @@ export class ReservationsService {
   }
 
   /**
+   * Admin: trasferisce una prenotazione attiva a un altro utente. Cambia solo
+   * `userId` (data/spot/tipo restano invariati). Atomico: una sola UPDATE,
+   * niente cancel+create. Errori:
+   *  - 404 se la reservation non esiste
+   *  - 409 se non è ACTIVE (CANCELLED non si può aggiornare)
+   *  - 409 se il nuovo utente ha già un'altra ACTIVE per stesso (date, spotType):
+   *    intercetta P2002 sul partial unique index
+   *    `Reservation_userId_date_spotType_active_key`.
+   *  - 404 se il nuovo `userId` non esiste (FK Prisma → P2003).
+   */
+  async adminUpdate(reservationId: string, newUserId: string) {
+    const r = await this.prisma.reservation.findUnique({
+      where: { id: reservationId },
+      select: { id: true, userId: true, status: true, spotType: true },
+    });
+    if (!r) throw new NotFoundException("prenotazione non trovata");
+    if (r.status !== "ACTIVE") {
+      throw new ConflictException("prenotazione non attiva, impossibile aggiornarla");
+    }
+    if (r.userId === newUserId) {
+      // No-op: l'admin ha cliccato Aggiorna senza aver cambiato utente.
+      // Ritorniamo il record corrente, niente errore.
+      return this.prisma.reservation.findUnique({
+        where: { id: r.id },
+        include: { spot: true },
+      });
+    }
+
+    try {
+      return await this.prisma.reservation.update({
+        where: { id: r.id },
+        data: { userId: newUserId },
+        include: { spot: true },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError) {
+        if (e.code === "P2002") {
+          throw new ConflictException(
+            r.spotType === "PARKING"
+              ? "il nuovo utente ha già un posto auto prenotato per questa data"
+              : "il nuovo utente ha già una scrivania prenotata per questa data",
+          );
+        }
+        if (e.code === "P2003") {
+          throw new NotFoundException("utente non trovato");
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
    * Lista globale prenotazioni — usata dalla pagina admin (read-only, accesso
    * limitato dal RolesGuard nel controller). Filtri tutti opzionali. NON
    * applichiamo un default su `status`: il client decide cosa mostrare.

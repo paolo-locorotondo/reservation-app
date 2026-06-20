@@ -34,6 +34,16 @@ export const AdminCreateReservationSchema = z.object({
 });
 export type AdminCreateReservationDto = z.infer<typeof AdminCreateReservationSchema>;
 
+// Admin: aggiorna l'intestatario di una prenotazione esistente (transfer).
+// Solo `userId` è modificabile: data/spot/tipo restano invariati. Il vincolo
+// unique partial `(userId, date, spotType) WHERE active` protegge dal caso
+// "il nuovo utente ha già una prenotazione per quel giorno e tipo" —
+// P2002 → 409 Conflict con messaggio italiano.
+export const AdminUpdateReservationSchema = z.object({
+  userId: z.string().min(1),
+});
+export type AdminUpdateReservationDto = z.infer<typeof AdminUpdateReservationSchema>;
+
 export const ReservationsRangeQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

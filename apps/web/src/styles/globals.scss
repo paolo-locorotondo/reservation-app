@@ -87,6 +87,38 @@ main {
   background-color: #fcf4d6; // Carbon yellow-10
 }
 
+// Modal admin di gestione prenotazione: quando l'admin sta aggiornando
+// l'intestatario (transfer), il primary button passa da rosso "Cancella" a
+// arancione "Aggiorna" per segnalare che l'azione modifica anziché
+// distruggere. Carbon non ha un kind="warning" nativo per `Button`: applico
+// il colore via classe sul `<Modal>` che colpisce il primary button interno.
+//
+// Token usato: Carbon orange-50 #ff832b (hover orange-60 #eb6200, active
+// orange-70 #ba4e00) — non è tra gli alias semantici ufficiali di Carbon, ma
+// è coerente con la palette grafica e ben distinguibile dal rosso Carbon
+// (#da1e28) e dal blu primary (#0f62fe).
+.rsv-modal-update .cds--btn--primary {
+  background-color: #ff832b;
+  border-color: #ff832b;
+  &:hover {
+    background-color: #eb6200;
+    border-color: #eb6200;
+  }
+  &:active {
+    background-color: #ba4e00;
+    border-color: #ba4e00;
+  }
+  &:focus {
+    border-color: #ffffff;
+    box-shadow: inset 0 0 0 1px #ffffff, inset 0 0 0 2px #ff832b;
+  }
+  &:disabled,
+  &[aria-disabled="true"] {
+    background-color: #c6c6c6;
+    border-color: #c6c6c6;
+  }
+}
+
 // Layout filtri admin organizzato in righe semantiche esplicite (Sede/Piano/Zona,
 // Stato/Da/A, Utenti). Ogni `.rsv-filter-row` distribuisce i suoi campi a piena
 // larghezza con `auto-fit + minmax(200px, 1fr)`: se lo schermo non basta a
