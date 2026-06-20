@@ -689,6 +689,50 @@ main {
     background: #fff1f1;
   }
 }
+// Variante "bloccato": il giorno è inserito in `Closure` per il filtro
+// (siteId, spotType) corrente. Click disabilitato (cursor:not-allowed) e
+// sfondo grigio cool — più scuro di `--disabled` (che indica solo "fuori
+// range") e diverso da `--full` (che indica "tutti i posti occupati,
+// caso temporaneo del giorno"): qui è una decisione amministrativa
+// duratura. Aria-label e title valorizzati col `reason` lato component.
+.rsv-calendar-day--closed {
+  background: #e0e0e0; // Carbon gray-20
+  color: #525252;
+  cursor: not-allowed;
+  // Pattern a strisce diagonali sottile per accentuare il "bloccato"
+  // visivamente, oltre allo sfondo grigio. Non invasivo, leggibile su
+  // entrambi i wrapper rsv-spot-tab--parking e --desk.
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0,
+    transparent 6px,
+    rgba(0, 0, 0, 0.04) 6px,
+    rgba(0, 0, 0, 0.04) 8px
+  );
+  &:hover {
+    background-color: #e0e0e0;
+  }
+}
+// Override per il calendar admin: il click su giorno bloccato resta
+// abilitato (l'admin può dover gestire prenotazioni preesistenti). Doppia
+// classe alza la specificity sopra `.rsv-calendar-day--closed`. Pattern e
+// colore di sfondo restano invariati.
+.rsv-admin-calendar-day.rsv-calendar-day--closed {
+  cursor: pointer;
+  &:hover {
+    background-color: #c6c6c6; // Carbon gray-30: feedback più scuro su hover
+  }
+}
+// Stesso pattern per l'utente in /my-reservations: se ha una prenotazione
+// (--mine = bordo blu) in un giorno bloccato (--closed = grigio + strisce),
+// il click deve restare abilitato per aprire il modal di cancel. Caso reale:
+// admin aggiunge un blocco DOPO che l'utente aveva già prenotato.
+.rsv-calendar-day--mine.rsv-calendar-day--closed {
+  cursor: pointer;
+  &:hover {
+    background-color: #c6c6c6;
+  }
+}
 // Bordo distintivo per giorno in cui l'utente ha già una propria prenotazione.
 // `box-shadow: inset` invece di border per non spostare il layout (border
 // cambierebbe la dimensione interna della cella).

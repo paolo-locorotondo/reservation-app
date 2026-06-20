@@ -2,6 +2,65 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-20 — Chiusure (Closure): festività, manutenzioni, blocchi di sede + menu admin nested
+
+Prima feature di amministrazione "calendariale": l'admin può bloccare giorni (festività, manutenzioni, chiusure di sede) e gli utenti non possono più prenotare per quei giorni. Pacchetto end-to-end (schema DB → API → UI) + ristrutturazione del menu admin per ospitare le 3 sotto-pagine (`/admin/reservations`, `/admin/closures`, futura `/admin/bulk-bookings`).
+
+### Schema & match logic
+
+Nuovo model [`Closure`](apps/api/prisma/schema.prisma) `(id, date, siteId?, spotType?, reason, createdByUserId, createdAt)` + migrazione [`20260620170000_add_closure_model`](apps/api/prisma/migrations/20260620170000_add_closure_model/migration.sql). Niente `@@unique` su `(date, siteId, spotType)` — closure sovrapposte sono permesse di design (es. globale "Natale" + locale "Lavori a Bari").
+
+Match logic in [`ClosuresService.findActive`](apps/api/src/closures/closures.service.ts):
+```
+spot blocked := exists Closure C where
+  C.date = dto.date
+  AND (C.siteId IS NULL OR C.siteId = spot.floor.siteId)
+  AND (C.spotType IS NULL OR C.spotType = spot.type)
+```
+
+Applicato solo in [`ReservationsService.create`](apps/api/src/reservations/reservations.service.ts) → 409 con `reason` italiano. **NON** retroattivo: prenotazioni esistenti su giorni bloccati restano ACTIVE (vedi TODO **C1.1** per analisi cancellazione retroattiva).
+
+### Backend
+
+Nuovo [`ClosuresModule`](apps/api/src/closures/closures.module.ts) con:
+- [`ClosuresService`](apps/api/src/closures/closures.service.ts) — esposto a `ReservationsService` (check `assertNotBlocked`) e `SpotsService` (overlay availability + filtro listSpots).
+- [`AdminClosuresController`](apps/api/src/closures/admin-closures.controller.ts) (`RolesGuard ADMIN`):
+  - `GET /admin/closures?from=&to=&siteId=` — lista filtrabile.
+  - `POST /admin/closures` body `{dates: string[], siteId?, spotType?, reason}` — bulk-friendly: una sola call inserisce N closure (utile per festività multiple).
+  - `DELETE /admin/closures/:id` — singola.
+  - `POST /admin/closures/bulk-delete` body `{ids: string[]}` — multipla, idempotente (P2025 ignorato), ritorna `{deleted: N}`.
+- [`ClosuresController`](apps/api/src/closures/closures.controller.ts) (JwtAuthGuard, no admin):
+  - `GET /closures?from=&to=&type=` — lista user-level compatta `[{date, reason}]` per popolare l'overlay calendar in /my-reservations dove non sappiamo a priori la sede.
+
+### Impatto sugli endpoint esistenti
+
+- [`SpotsService.list`](apps/api/src/spots/spots.service.ts) cambia shape response da `SpotWithAvailability[]` a `{items, closed, closedReason}`. Quando l'utente seleziona una sede e quel giorno è bloccato, `items: []` + `closed: true` + `reason` → la UI mostra banner "Giorno bloccato" invece della lista. Senza siteId il check Closure è skipped (ambiguità). Il client adatta i 3 consumer (SpotsBrowser, BookForUserDialog, AdminReservationsList).
+- [`SpotsService.availability`](apps/api/src/spots/spots.service.ts) aggiunge `closed` + `closedReason` per ogni giorno della response. Schema [`SpotsAvailabilityDay`](packages/shared/src/spot.schema.ts) esteso. Una sola query alla tabella Closure per tutto il range.
+
+### Frontend
+
+- **Menu admin nested** ([`AppShell.tsx`](apps/web/src/components/AppShell.tsx)): NAV con `children`. "Amministrazione" è ora un branch con 3 sotto-voci (Prenotazioni, Chiusure, Caricamento massivo). Render condizionale: `HeaderMenu` Carbon su desktop (dropdown con caret), `SideNavMenu` nel drawer mobile (espandibile, `defaultExpanded` se siamo in una sotto-pagina). L'icona shortcut mobile (HeaderGlobalAction "Amministrazione") apre un `HeaderPanel` con `SwitcherItem` per i sotto-link, idiomatico Carbon (simmetrico al menu utente).
+- **Pagina `/admin/closures`** ([`AdminClosuresList.tsx`](apps/web/src/components/AdminClosuresList.tsx)):
+  - Tabella con sort sulle 6 colonne (Data, Sede, Tipo, Motivo, Creato da, Creato il), pattern uguale a admin/reservations.
+  - `FiltersPanel` collassabile sopra: Sede + Tipo (client) + Da + A.
+  - Multi-select via `TableSelectAll` + `TableSelectRow`. Bottone "Rimuovi selezionate (N)" `kind="danger--tertiary"` visibile solo con N>0.
+  - Modal "Aggiungi chiusura" con calendar inline (riusa `SpotsCalendar` con `showAvailability=false` e `unboundedNavigation`): click su cella → toggle nel Set, click di nuovo rimuove. Le date scelte appaiono come `Tag filter` rimovibili sotto. Carbon non supporta `datePickerType="multiple"` → questa è la soluzione scalabile.
+  - Modal di delete singola e modal di bulk-delete con conferma.
+- **Calendar utente** ([`SpotsCalendar.tsx`](apps/web/src/components/SpotsCalendar.tsx)):
+  - Nuova classe `.rsv-calendar-day--closed` ([`globals.scss`](apps/web/src/styles/globals.scss)): sfondo Carbon gray-20 + pattern strisce diagonali leggere, `cursor: not-allowed`, click disabilitato. Aria-label e title col reason.
+  - Nuova prop `closuresByDate?: Map<string, string>` come overlay esterno: il calendar legge le closure da DUE fonti (response listAvailability `info.closed`, oppure prop esterna se disponibile) — la prima usa l'una, /my-reservations usa l'altra (no fetch availability).
+  - Nuova prop `unboundedNavigation`: estesa per liberare anche `disabled` (fix bug latente in /my-reservations dove il click su date passate era disabilitato).
+  - Edge case "ho una prenotazione in giorno bloccato" (admin aggiunge blocco DOPO la mia create): cella grigia + bordo blu, click resta abilitato per cancellare. Override CSS `.rsv-calendar-day--mine.rsv-calendar-day--closed { cursor: pointer }`.
+- **Calendar admin** ([`AdminReservationsCalendar.tsx`](apps/web/src/components/AdminReservationsCalendar.tsx)): nuova prop `closuresByDate`. Padre fa fetch dedicata `api.listAdminClosures({from, to, siteId})` filtrata client-side per type. Cella grigia + reason ma click sempre abilitato (l'admin gestisce prenotazioni preesistenti su giorni bloccati). Override CSS `.rsv-admin-calendar-day.rsv-calendar-day--closed { cursor: pointer }`.
+- **Banner "Giorno bloccato"** in `/parking` e `/desks` vista lista ([`SpotsBrowser.tsx`](apps/web/src/components/SpotsBrowser.tsx)): `InlineNotification kind="warning"` sopra la tabella + lista nascosta quando `res.closed`. Distinto dal banner "Nessun risultato" (filtri troppo restrittivi).
+- **API client** ([`api.ts`](apps/web/src/lib/api.ts)): `listClosures` (user), `listAdminClosures`, `adminCreateClosures`, `adminDeleteClosure`, `adminBulkDeleteClosures`. Cambio shape `listSpots`/`listAdminSpots` propagato.
+
+### Note di design
+
+- **Click admin su giorno bloccato resta abilitato** (sia in calendar admin che in admin/closures): l'admin deve poter gestire eccezioni e cancellare retroattivamente. Pattern admin-vs-user esplicito.
+- **Bulk-friendly fin dall'inizio**: sia POST che bulk-delete accettano array di id/date in una sola call. La UI di /admin/closures sfrutta entrambi (creazione N date + cancellazione N selezionate).
+- **Endpoint user `/closures` separato da `/admin/closures`**: payload compatto (solo date + reason, no audit), pensato per l'overlay del calendar non per amministrare.
+
 ## 2026-06-20 — `/my-reservations` come `/admin/reservations`: counts, banner per-tab, calendar↔lista coordinati
 
 Pacchetto di rifiniture che uniforma `/my-reservations` al pattern di `/admin/reservations` (tab gestisce sia calendar che lista con una fetch unica), introduce parametri configurabili e sistema diversi micro-bug emersi nei round di test.

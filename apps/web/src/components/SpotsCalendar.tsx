@@ -60,6 +60,12 @@ interface Props {
   // = mese corrente. Tipicamente il padre passa il mese di `dateFrom` corrente
   // (se valorizzato) così il calendar si riallinea al filtro della lista.
   initialMonth?: Date;
+  // Overlay closure passato dall'esterno. Quando `showAvailability=true` il
+  // flag `closed` arriva già dalla response di `listAvailability`; questa
+  // prop serve invece quando NON c'è fetch (es. /my-reservations vista
+  // calendar con `showAvailability=false`) per popolare comunque l'overlay
+  // grigio "giorno bloccato" via fetch separata lato parent (GET /closures).
+  closuresByDate?: Map<string, string>;
 }
 
 function isoFromUtc(d: Date): string {
@@ -104,6 +110,7 @@ export function SpotsCalendar({
   onMonthChange,
   unboundedNavigation = false,
   initialMonth,
+  closuresByDate,
 }: Props) {
   const [currentMonth, setCurrentMonth] = useState(() =>
     initialMonth ? startOfMonthUtc(initialMonth) : startOfMonthUtc(todayUtc()),
@@ -113,9 +120,13 @@ export function SpotsCalendar({
   useEffect(() => {
     onMonthChange?.(currentMonth);
   }, [currentMonth, onMonthChange]);
-  const [data, setData] = useState<Map<string, { available: number; total: number }>>(
-    new Map(),
-  );
+  // Map iso → { available, total, closed?, closedReason? }. Il flag `closed`
+  // viene popolato dal backend quando il giorno è bloccato per il filtro
+  // (siteId, type) corrente: la cella diventa grigia "lucchetto" e
+  // l'`onDayClick` viene disabilitato. Stesso shape di `SpotsAvailabilityDay`.
+  const [data, setData] = useState<
+    Map<string, { available: number; total: number; closed: boolean; closedReason: string | null }>
+  >(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -168,8 +179,18 @@ export function SpotsCalendar({
       })
       .then((arr) => {
         if (cancelled) return;
-        const m = new Map<string, { available: number; total: number }>();
-        for (const d of arr) m.set(d.date, { available: d.available, total: d.total });
+        const m = new Map<
+          string,
+          { available: number; total: number; closed: boolean; closedReason: string | null }
+        >();
+        for (const d of arr) {
+          m.set(d.date, {
+            available: d.available,
+            total: d.total,
+            closed: d.closed,
+            closedReason: d.closedReason,
+          });
+        }
         setData(m);
       })
       .catch((e: ApiError) => {
@@ -297,17 +318,45 @@ export function SpotsCalendar({
                 c.date!.getTime() >= today.getTime() &&
                 c.date!.getTime() <= maxDate.getTime();
               const info = data.get(c.iso);
-              const isFull = info !== undefined && info.available === 0;
-              const isAvailable = info !== undefined && info.available > 0;
+              // Closure rilevata da DUE fonti: `info.closed` (dalla fetch
+              // listAvailability quando showAvailability=true) o
+              // `closuresByDate` passata dal parent (overlay esterno usato
+              // in /my-reservations dove non c'è fetch availability).
+              // Le due fonti sono mutuamente esclusive in pratica ma
+              // funzionano combinate (OR) per coprire entrambi i flussi.
+              const externalClosureReason = closuresByDate?.get(c.iso) ?? null;
+              const isClosed =
+                info?.closed === true || externalClosureReason !== null;
+              const closedReason =
+                info?.closed === true ? info.closedReason : externalClosureReason;
+              // Quando il giorno è bloccato, le info available/full perdono
+              // significato: niente pallini, niente "esaurito". La sola
+              // semantica visibile è "lucchetto + reason".
+              const isFull = !isClosed && info !== undefined && info.available === 0;
+              const isAvailable = !isClosed && info !== undefined && info.available > 0;
               const isMine = myReservedDates.has(c.iso);
               const isToday = c.date!.getTime() === today.getTime();
-              // Quando showAvailability=false, la cella è cliccabile per tutto
-              // il range valido (non dipende da `info`, che è sempre vuoto).
-              const disabled = !inRange || (showAvailability && !info);
+              // `unboundedNavigation` libera ANCHE il click sulle celle fuori
+              // range — non solo la nav prev/next. Usato in /my-reservations
+              // (lettura proprio storico) e in /admin/closures (selezione date
+              // arbitrarie per i blocchi). Senza questo, il calendar
+              // mostrerebbe `--disabled` su tutto ciò che non rientra in
+              // [oggi, oggi+MAX_DAYS_AHEAD].
+              const outOfRange = !unboundedNavigation && !inRange;
+              // Click su giorno bloccato:
+              //   - normalmente disabilitato (l'utente non può prenotare);
+              //   - MA se ho una prenotazione esistente lì (`isMine`), abilitato
+              //     così posso cancellarla. Caso reale: blocco aggiunto DOPO la
+              //     mia prenotazione → vedo cella grigia + bordo blu, e devo
+              //     poter cliccare per aprire il modal di cancel.
+              const closedNotMine = isClosed && !isMine;
+              const disabled =
+                outOfRange || closedNotMine || (showAvailability && !info);
 
               const classes = [
                 "rsv-calendar-day",
-                disabled && "rsv-calendar-day--disabled",
+                disabled && !isClosed && "rsv-calendar-day--disabled",
+                isClosed && "rsv-calendar-day--closed",
                 isAvailable && "rsv-calendar-day--available",
                 isFull && "rsv-calendar-day--full",
                 isMine && "rsv-calendar-day--mine",
@@ -330,20 +379,24 @@ export function SpotsCalendar({
                   disabled={disabled}
                   onClick={() => !disabled && onDayClick(c.iso!)}
                   aria-label={
-                    isAvailable
-                      ? `${c.day} ${monthLabelCap}, ${info!.available} posti disponibili${isMine ? ", hai una prenotazione" : ""}`
-                      : isFull
-                        ? `${c.day} ${monthLabelCap}, tutti i posti occupati${isMine ? ", hai una prenotazione" : ""}`
-                        : myLabel
-                          ? `${c.day} ${monthLabelCap}, prenotazione: ${myLabel}`
-                          : `${c.day} ${monthLabelCap}`
+                    isClosed
+                      ? `${c.day} ${monthLabelCap}, giorno bloccato: ${closedReason ?? ""}`
+                      : isAvailable
+                        ? `${c.day} ${monthLabelCap}, ${info!.available} posti disponibili${isMine ? ", hai una prenotazione" : ""}`
+                        : isFull
+                          ? `${c.day} ${monthLabelCap}, tutti i posti occupati${isMine ? ", hai una prenotazione" : ""}`
+                          : myLabel
+                            ? `${c.day} ${monthLabelCap}, prenotazione: ${myLabel}`
+                            : `${c.day} ${monthLabelCap}`
                   }
                   title={
-                    isAvailable
-                      ? `${info!.available} disponibili su ${info!.total}`
-                      : isFull
-                        ? `Tutti i ${info!.total} posti occupati`
-                        : myLabel ?? undefined
+                    isClosed
+                      ? `Giorno bloccato: ${closedReason ?? ""}`
+                      : isAvailable
+                        ? `${info!.available} disponibili su ${info!.total}`
+                        : isFull
+                          ? `Tutti i ${info!.total} posti occupati`
+                          : myLabel ?? undefined
                   }
                 >
                   <span className="rsv-calendar-day-number">{c.day}</span>

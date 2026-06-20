@@ -9,6 +9,7 @@ import {
   HeaderMenuButton,
   HeaderName,
   HeaderNavigation,
+  HeaderMenu,
   HeaderMenuItem,
   HeaderGlobalBar,
   HeaderGlobalAction,
@@ -19,20 +20,45 @@ import {
   SideNav,
   SideNavItems,
   SideNavLink,
+  SideNavMenu,
+  SideNavMenuItem,
   SkipToContent,
   Content,
 } from "@carbon/react";
 import { UserAvatar, Car, Devices, Calendar, Group, Home } from "@carbon/icons-react";
 import type { ComponentType, ReactNode } from "react";
 
-// Le icone vengono usate solo nella variante mobile dell'header (dove la nav
-// testuale collassa nel side menu). Su desktop si usano comunque le label.
-// `adminOnly: true` nasconde la voce ai non-ADMIN (filtrato in render).
-const NAV: { label: string; href: string; Icon: ComponentType; adminOnly?: boolean }[] = [
+// Voce di nav. Le voci con `children` si rendono come dropdown
+// (Carbon `HeaderMenu` su desktop, `SideNavMenu` su mobile drawer); cliccare
+// la voce-padre apre il sotto-menu invece di navigare. Le voci foglia
+// navigano direttamente all'`href`. `adminOnly` nasconde l'intera voce
+// (compresi i figli) ai non-ADMIN.
+//
+// L'`Icon` è usata solo nello shortcut della top-bar mobile (HeaderGlobalAction).
+// Per voci-padre con children, lo shortcut va al PRIMO figlio (default landing
+// per quella sezione) — comportamento idiomatico per nav a 2 livelli su mobile.
+type NavLeaf = { label: string; href: string; Icon: ComponentType };
+type NavBranch = { label: string; Icon: ComponentType; children: NavLeaf[] };
+type NavItem = (NavLeaf | NavBranch) & { adminOnly?: boolean };
+
+function isBranch(item: NavItem): item is NavBranch & { adminOnly?: boolean } {
+  return "children" in item;
+}
+
+const NAV: NavItem[] = [
   { label: "Posti auto", href: "/parking", Icon: Car },
   { label: "Scrivanie", href: "/desks", Icon: Devices },
   { label: "Le mie prenotazioni", href: "/my-reservations", Icon: Calendar },
-  { label: "Amministrazione", href: "/admin/reservations", Icon: Group, adminOnly: true },
+  {
+    label: "Amministrazione",
+    Icon: Group,
+    adminOnly: true,
+    children: [
+      { label: "Prenotazioni", href: "/admin/reservations", Icon: Group },
+      { label: "Chiusure", href: "/admin/closures", Icon: Group },
+      { label: "Caricamento massivo", href: "/admin/bulk-bookings", Icon: Group },
+    ],
+  },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -40,6 +66,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { data: session } = useSession();
   const [userPanelOpen, setUserPanelOpen] = useState(false);
+  // Per le voci-padre della nav (branch), su mobile l'icona shortcut nella
+  // top-bar apre un HeaderPanel con i sotto-link invece di navigare al primo
+  // figlio. Identifico il branch aperto dalla sua label (max 1 alla volta).
+  const [branchPanelLabel, setBranchPanelLabel] = useState<string | null>(null);
 
   const displayName = session?.user?.name ?? "";
   const email = session?.user?.email ?? "";
@@ -73,6 +103,30 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, [userPanelOpen]);
 
+  // Stesso pattern click-outside per il branch-panel mobile (Amministrazione
+  // ha 3 sotto-voci che si aprono come dropdown anche da icona). Stesso
+  // listener riutilizzabile per tutti i branch (max 1 aperto alla volta).
+  const branchPanelRef = useRef<HTMLDivElement | null>(null);
+  const branchTriggerRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!branchPanelLabel) return;
+    function handleClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (branchPanelRef.current?.contains(t)) return;
+      if (branchTriggerRef.current?.contains(t)) return;
+      setBranchPanelLabel(null);
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setBranchPanelLabel(null);
+    }
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [branchPanelLabel]);
+
   return (
     <>
       <HeaderContainer
@@ -105,38 +159,107 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Home size={20} className="rsv-brand-home" aria-label="Home" />
             </HeaderName>
             <HeaderNavigation aria-label="Sezioni">
-              {visibleNav.map((item) => (
-                <HeaderMenuItem
-                  key={item.href}
-                  href={item.href}
-                  isActive={pathname?.startsWith(item.href)}
-                  onClick={(e: React.MouseEvent) => {
-                    e.preventDefault();
-                    router.push(item.href);
-                  }}
-                >
-                  {item.label}
-                </HeaderMenuItem>
-              ))}
+              {visibleNav.map((item) => {
+                if (isBranch(item)) {
+                  // `HeaderMenu` Carbon: link-padre con caret che apre un
+                  // dropdown contenente i `HeaderMenuItem` figli. Il padre
+                  // appare "active" se il pathname matcha uno qualsiasi dei
+                  // figli (es. su /admin/closures la voce "Amministrazione"
+                  // resta evidenziata).
+                  const anyChildActive = item.children.some((c) =>
+                    pathname?.startsWith(c.href),
+                  );
+                  return (
+                    <HeaderMenu
+                      key={item.label}
+                      aria-label={item.label}
+                      menuLinkName={item.label}
+                      isActive={anyChildActive}
+                    >
+                      {item.children.map((child) => (
+                        <HeaderMenuItem
+                          key={child.href}
+                          href={child.href}
+                          isActive={pathname?.startsWith(child.href)}
+                          onClick={(e: React.MouseEvent) => {
+                            e.preventDefault();
+                            router.push(child.href);
+                          }}
+                        >
+                          {child.label}
+                        </HeaderMenuItem>
+                      ))}
+                    </HeaderMenu>
+                  );
+                }
+                return (
+                  <HeaderMenuItem
+                    key={item.href}
+                    href={item.href}
+                    isActive={pathname?.startsWith(item.href)}
+                    onClick={(e: React.MouseEvent) => {
+                      e.preventDefault();
+                      router.push(item.href);
+                    }}
+                  >
+                    {item.label}
+                  </HeaderMenuItem>
+                );
+              })}
             </HeaderNavigation>
             <HeaderGlobalBar>
               {/* Nav-shortcut a icone visibili solo su mobile (sotto il
                   breakpoint Carbon `lg` = 1056px, dove la HeaderNavigation
                   testuale è già nascosta da Carbon). Su desktop la classe
                   `rsv-header-mobile-nav` le nasconde via CSS, evitando
-                  duplicati con la nav testuale. */}
-              {visibleNav.map((item) => (
-                <HeaderGlobalAction
-                  key={item.href}
-                  aria-label={item.label}
-                  tooltipAlignment="center"
-                  isActive={pathname?.startsWith(item.href)}
-                  onClick={() => router.push(item.href)}
-                  className="rsv-header-mobile-nav"
-                >
-                  <item.Icon />
-                </HeaderGlobalAction>
-              ))}
+                  duplicati con la nav testuale.
+                  Voci-foglia: click → navigate. Voci-padre (branch): click
+                  apre/chiude un HeaderPanel con i sotto-link (idiomatico
+                  Carbon, simmetrico al menu utente). Il drawer del menu
+                  hamburger li mostra anche come SideNavMenu — i 2 entry
+                  point coesistono. */}
+              {visibleNav.map((item) => {
+                if (isBranch(item)) {
+                  const isOpen = branchPanelLabel === item.label;
+                  const matchPrefix = item.children.some((c) =>
+                    pathname?.startsWith(c.href),
+                  );
+                  return (
+                    <HeaderGlobalAction
+                      key={item.label}
+                      aria-label={
+                        isOpen ? `Chiudi menu ${item.label}` : `Apri menu ${item.label}`
+                      }
+                      tooltipAlignment="center"
+                      isActive={isOpen || matchPrefix}
+                      onClick={() =>
+                        setBranchPanelLabel(isOpen ? null : item.label)
+                      }
+                      // Ref dinamico: punta al trigger del branch attualmente
+                      // aperto (per il click-outside detector). Quando isOpen
+                      // diventa false la ref viene "abbandonata" — accettabile
+                      // perché il listener parte solo quando branchPanelLabel
+                      // è valorizzato.
+                      ref={isOpen ? branchTriggerRef : undefined}
+                      className="rsv-header-mobile-nav"
+                    >
+                      <item.Icon />
+                    </HeaderGlobalAction>
+                  );
+                }
+                return (
+                  <HeaderGlobalAction
+                    key={item.href}
+                    aria-label={item.label}
+                    tooltipAlignment="center"
+                    isActive={pathname?.startsWith(item.href)}
+                    onClick={() => router.push(item.href)}
+                    className="rsv-header-mobile-nav"
+                  >
+                    <item.Icon />
+                  </HeaderGlobalAction>
+                );
+              })}
               {displayName && (
                 <span className="rsv-header-username">{displayName}</span>
               )}
@@ -174,6 +297,38 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </SwitcherItem>
               </Switcher>
             </HeaderPanel>
+            {/* Un HeaderPanel per ogni branch della nav (oggi solo
+                "Amministrazione"). Si aprono al click dell'icona shortcut
+                mobile e contengono i sotto-link come SwitcherItem.
+                `expanded` controllato dal `branchPanelLabel`. */}
+            {visibleNav.map((item) => {
+              if (!isBranch(item)) return null;
+              const isOpen = branchPanelLabel === item.label;
+              return (
+                <HeaderPanel
+                  key={item.label}
+                  expanded={isOpen}
+                  aria-label={`Menu ${item.label}`}
+                  ref={isOpen ? branchPanelRef : undefined}
+                >
+                  <Switcher aria-label={item.label}>
+                    {item.children.map((child) => (
+                      <SwitcherItem
+                        key={child.href}
+                        aria-label={child.label}
+                        isSelected={pathname?.startsWith(child.href)}
+                        onClick={() => {
+                          setBranchPanelLabel(null);
+                          router.push(child.href);
+                        }}
+                      >
+                        {child.label}
+                      </SwitcherItem>
+                    ))}
+                  </Switcher>
+                </HeaderPanel>
+              );
+            })}
             <SideNav
               aria-label="Navigazione"
               expanded={isSideNavExpanded}
@@ -181,20 +336,53 @@ export function AppShell({ children }: { children: ReactNode }) {
               onSideNavBlur={onClickSideNavExpand}
             >
               <SideNavItems>
-                {visibleNav.map((item) => (
-                  <SideNavLink
-                    key={item.href}
-                    href={item.href}
-                    isActive={pathname?.startsWith(item.href)}
-                    onClick={(e: React.MouseEvent) => {
-                      e.preventDefault();
-                      router.push(item.href);
-                      onClickSideNavExpand();
-                    }}
-                  >
-                    {item.label}
-                  </SideNavLink>
-                ))}
+                {visibleNav.map((item) => {
+                  if (isBranch(item)) {
+                    // `SideNavMenu` Carbon: voce espandibile (chevron) che
+                    // contiene `SideNavMenuItem` figli. `defaultExpanded`
+                    // se siamo già dentro una sotto-pagina del branch, così
+                    // il drawer apre già "aperto" sul branch corrente.
+                    const anyChildActive = item.children.some((c) =>
+                      pathname?.startsWith(c.href),
+                    );
+                    return (
+                      <SideNavMenu
+                        key={item.label}
+                        title={item.label}
+                        defaultExpanded={anyChildActive}
+                      >
+                        {item.children.map((child) => (
+                          <SideNavMenuItem
+                            key={child.href}
+                            href={child.href}
+                            isActive={pathname?.startsWith(child.href)}
+                            onClick={(e: React.MouseEvent) => {
+                              e.preventDefault();
+                              router.push(child.href);
+                              onClickSideNavExpand();
+                            }}
+                          >
+                            {child.label}
+                          </SideNavMenuItem>
+                        ))}
+                      </SideNavMenu>
+                    );
+                  }
+                  return (
+                    <SideNavLink
+                      key={item.href}
+                      href={item.href}
+                      isActive={pathname?.startsWith(item.href)}
+                      onClick={(e: React.MouseEvent) => {
+                        e.preventDefault();
+                        router.push(item.href);
+                        onClickSideNavExpand();
+                      }}
+                    >
+                      {item.label}
+                    </SideNavLink>
+                  );
+                })}
               </SideNavItems>
             </SideNav>
           </Header>

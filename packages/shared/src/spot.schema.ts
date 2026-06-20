@@ -44,5 +44,10 @@ export const SpotsAvailabilityDaySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   available: z.number().int().nonnegative(),
   total: z.number().int().nonnegative(),
+  // Se true, il giorno è bloccato (Closure attiva per il filtro corrente):
+  // il calendar mostra cella grigia "lucchetto", click disabilitato. Il
+  // motivo è in `closedReason` (testo libero scritto dall'admin).
+  closed: z.boolean(),
+  closedReason: z.string().nullable(),
 });
 export type SpotsAvailabilityDay = z.infer<typeof SpotsAvailabilityDaySchema>;

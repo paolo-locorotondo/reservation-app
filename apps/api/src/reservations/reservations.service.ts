@@ -14,6 +14,7 @@ import {
   type CreateReservationDto,
   type ReservationsRangeQuery,
 } from "@reservation/shared";
+import { ClosuresService } from "../closures/closures.service";
 
 // Lookup env-based con fallback alla costante shared. Pattern simmetrico a
 // `MAX_DAYS_AHEAD` in `common/business-rules.ts`: il valore numerico dalla
@@ -37,7 +38,10 @@ const MY_LIST_LIMIT = envInt(
 
 @Injectable()
 export class ReservationsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private closures: ClosuresService,
+  ) {}
 
   /**
    * Regole applicative:
@@ -69,10 +73,25 @@ export class ReservationsService {
 
     const spot = await this.prisma.spot.findUnique({
       where: { id: dto.spotId },
-      select: { id: true, type: true, active: true },
+      select: {
+        id: true,
+        type: true,
+        active: true,
+        floor: { select: { siteId: true } },
+      },
     });
     if (!spot) throw new NotFoundException("posto non trovato");
     if (!spot.active) throw new ConflictException("posto non attivo");
+
+    // Check Closure: se il giorno è bloccato per questo (siteId, spotType),
+    // rifiutiamo con 409 + reason. Vale anche per l'admin: se HR ha
+    // dichiarato il giorno chiuso, anche le prenotazioni "per conto di"
+    // vanno rifiutate (a meno che HR non rimuova prima il blocco).
+    await this.closures.assertNotBlocked({
+      date,
+      siteId: spot.floor.siteId,
+      spotType: spot.type,
+    });
 
     // Usa `spotType` direttamente (denormalizzato): niente join verso Spot.
     const existing = await this.prisma.reservation.findFirst({

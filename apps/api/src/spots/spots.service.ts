@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { MAX_DAYS_AHEAD } from "../common/business-rules";
+import { ClosuresService } from "../closures/closures.service";
 import type {
   SpotsQuery,
   SpotsAvailabilityQuery,
@@ -10,7 +11,10 @@ import type {
 
 @Injectable()
 export class SpotsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private closures: ClosuresService,
+  ) {}
 
   /**
    * Lista spot del tipo richiesto con flag `available` per la data.
@@ -20,11 +24,36 @@ export class SpotsService {
    * `opts.unrestrictedDate=true`: bypassa il check `>= today` e `<= today + N`
    * (usato dall'endpoint admin per popolare il dialog "Prenota per utente"
    * anche su date storiche).
+   *
+   * Response wrapper `{ items, closed, closedReason }`:
+   *  - `closed=true` quando l'utente ha selezionato una sede precisa e quel
+   *    giorno è bloccato per quella sede (o globalmente). `items` è vuoto:
+   *    inutile mostrare la lista degli spot — l'utente non può prenotare.
+   *  - `closed=false` altrimenti (caso normale, oppure quando siteId non è
+   *    specificato e il check Closure sarebbe ambiguo: per ora skipped).
    */
-  async list(q: SpotsQuery, opts: { unrestrictedDate?: boolean } = {}) {
+  async list(
+    q: SpotsQuery,
+    opts: { unrestrictedDate?: boolean } = {},
+  ): Promise<SpotsListResponse> {
     const date = opts.unrestrictedDate
       ? parseDateOnly(q.date)
       : parseDateUtc(q.date);
+
+    // Check Closure solo quando l'utente ha scelto una sede precisa. Senza
+    // siteId la lista mostra spot di tutte le sedi: alcune potrebbero essere
+    // bloccate, altre no — un banner globale sarebbe ingannevole. L'admin
+    // bypassa via `unrestrictedDate=true` (vede tutto a prescindere).
+    if (q.siteId && !opts.unrestrictedDate) {
+      const closure = await this.closures.findActive({
+        date,
+        siteId: q.siteId,
+        spotType: q.type,
+      });
+      if (closure) {
+        return { items: [], closed: true, closedReason: closure.reason };
+      }
+    }
 
     const where: Prisma.SpotWhereInput = {
       type: q.type,
@@ -46,7 +75,9 @@ export class SpotsService {
         zone: { select: { name: true } },
       },
     });
-    if (spots.length === 0) return [];
+    if (spots.length === 0) {
+      return { items: [], closed: false, closedReason: null };
+    }
 
     const reservations = await this.prisma.reservation.findMany({
       where: {
@@ -58,11 +89,15 @@ export class SpotsService {
     });
     const taken = new Set(reservations.map((r) => r.spotId));
 
-    return spots.map(({ zone, ...s }) => ({
-      ...s,
-      zoneName: zone?.name ?? null,
-      available: !taken.has(s.id),
-    }));
+    return {
+      items: spots.map(({ zone, ...s }) => ({
+        ...s,
+        zoneName: zone?.name ?? null,
+        available: !taken.has(s.id),
+      })),
+      closed: false,
+      closedReason: null,
+    };
   }
 
   /**
@@ -129,14 +164,54 @@ export class SpotsService {
       s.add(r.spotId);
     }
 
+    // Closure check: una sola query per tutto il range. Map iso → reason
+    // per il join in memoria con i giorni dell'output.
+    const closures = await this.closures.findActiveInRange({
+      from,
+      to,
+      siteId: q.siteId,
+      spotType: q.type,
+    });
+    const closureByDate = new Map<string, string>();
+    for (const c of closures) {
+      // `c.date` è DATE Postgres → arriva come Date UTC al midnight: stessa
+      // forma usata da `isoFromUtc` per le altre date del range.
+      closureByDate.set(isoFromUtc(c.date), c.reason);
+    }
+
     const out: SpotsAvailabilityDay[] = [];
     for (let t = from.getTime(); t <= to.getTime(); t += 86_400_000) {
       const iso = isoFromUtc(new Date(t));
       const usedCount = taken.get(iso)?.size ?? 0;
-      out.push({ date: iso, available: total - usedCount, total });
+      const closedReason = closureByDate.get(iso) ?? null;
+      out.push({
+        date: iso,
+        available: total - usedCount,
+        total,
+        closed: closedReason !== null,
+        closedReason,
+      });
     }
     return out;
   }
+}
+
+// Response wrapper di `list()`: il vecchio shape era `SpotWithAvailability[]`,
+// ora `{ items, closed, closedReason }`. La transizione è gestita nel client
+// (vedi web/src/lib/api.ts e SpotsBrowser).
+export interface SpotsListResponse {
+  items: Array<{
+    id: string;
+    code: string;
+    type: import("@prisma/client").SpotType;
+    floorId: string;
+    zoneId: string | null;
+    active: boolean;
+    zoneName: string | null;
+    available: boolean;
+  }>;
+  closed: boolean;
+  closedReason: string | null;
 }
 
 function isoFromUtc(d: Date): string {

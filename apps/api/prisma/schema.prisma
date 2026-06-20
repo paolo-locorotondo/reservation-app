@@ -42,6 +42,7 @@ model User {
   role         Role          @default(USER)
   accounts     Account[]
   reservations Reservation[]
+  closures     Closure[]     // Audit: chi ha creato il blocco
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
@@ -62,10 +63,11 @@ model Account {
 }
 
 model Site {
-  id     String  @id @default(cuid())
-  code   String  @unique
-  name   String
-  floors Floor[]
+  id       String    @id @default(cuid())
+  code     String    @unique
+  name     String
+  floors   Floor[]
+  closures Closure[]
 }
 
 model Floor {
@@ -137,4 +139,34 @@ model Reservation {
   // sulla stessa slot.
   @@index([userId, date])
   @@index([date, status])
+}
+
+// Giorni bloccati (festività, chiusure di sede, manutenzioni). Le prenotazioni
+// non possono essere CREATE per giorni che matchano una Closure. Le esistenti
+// non vengono invalidate retroattivamente — l'admin le cancella manualmente
+// se serve.
+//
+// Match logic (in ReservationsService.create):
+//   spot blocked := exists Closure C where
+//     C.date = dto.date
+//     AND (C.siteId IS NULL OR C.siteId = spot.floor.siteId)
+//     AND (C.spotType IS NULL OR C.spotType = spot.type)
+//
+// Niente @@unique su (date, siteId, spotType): permettiamo closure
+// sovrapposte (es. globale "Natale" + locale "Lavori a Bari").
+model Closure {
+  id              String   @id @default(cuid())
+  date            DateTime @db.Date
+  // null = blocca TUTTE le sedi
+  siteId          String?
+  // null = blocca ENTRAMBI i tipi (parking + desk)
+  spotType        SpotType?
+  reason          String
+  createdAt       DateTime @default(now())
+  createdByUserId String
+  createdBy       User     @relation(fields: [createdByUserId], references: [id])
+  site            Site?    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([date])
+  @@index([siteId, date])
 }

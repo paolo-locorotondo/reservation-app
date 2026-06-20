@@ -278,6 +278,14 @@ function AdminReservationsTab({
   // Dialog "Prenota per utente": target null = chiuso, oggetto = aperto con
   // tipo (e opzionale data preimpostata).
   const [bookTarget, setBookTarget] = useState<BookForUserTarget | null>(null);
+  // Map iso → reason delle Closure attive nel range Da/A correnti, filtrato
+  // per (siteId, type) del tab. Passato al calendar admin come overlay
+  // visivo (cella grigia + tooltip "Giorno bloccato"). Best-effort: se la
+  // fetch fallisce, il calendar mostra le celle senza overlay (niente
+  // notifica all'utente, non bloccante).
+  const [closuresByDate, setClosuresByDate] = useState<Map<string, string>>(
+    new Map(),
+  );
   // Numero totale di spot del filtro corrente (type + sede + piano + zona).
   // Serve al calendar per evidenziare i giorni "esauriti" (count >= total).
   // null = non ancora caricato (calendar non mostra --full).
@@ -328,12 +336,12 @@ function AdminReservationsTab({
         siteId: siteId || undefined,
         floorId: floorId || undefined,
       })
-      .then((spots) => {
+      .then((res) => {
         if (cancelled) return;
         const needle = zoneName.trim().toLowerCase();
         const filtered = needle
-          ? spots.filter((s) => (s.zoneName ?? "").toLowerCase().includes(needle))
-          : spots;
+          ? res.items.filter((s) => (s.zoneName ?? "").toLowerCase().includes(needle))
+          : res.items;
         setTotalCapacity(filtered.length);
       })
       .catch(() => {
@@ -346,6 +354,41 @@ function AdminReservationsTab({
       cancelled = true;
     };
   }, [type, siteId, floorId, zoneName]);
+
+  // Fetch Closure: popola la map iso→reason per il calendar admin. Filtrato
+  // per range Da/A e siteId (se valorizzato). Lo `spotType` non lo passiamo
+  // al backend per il filtro per-tipo: vogliamo che il calendar mostri sia
+  // chiusure specifiche per `type` sia chiusure globali (`spotType=null`).
+  // Filtriamo lato client.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listAdminClosures({
+        from: dateFrom || undefined,
+        to: dateTo || undefined,
+        siteId: siteId || undefined,
+      })
+      .then((closures) => {
+        if (cancelled) return;
+        const m = new Map<string, string>();
+        for (const c of closures) {
+          // Match per tipo: la closure si applica al tab corrente se
+          // spotType è null (entrambi) oppure coincide col `type`.
+          if (c.spotType !== null && c.spotType !== type) continue;
+          m.set(c.date.slice(0, 10), c.reason);
+        }
+        setClosuresByDate(m);
+      })
+      .catch(() => {
+        // Best-effort: senza closures il calendar mostra solo --has-items
+        // / --full. Niente notifica utente, non bloccante.
+        if (cancelled) return;
+        setClosuresByDate(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [type, siteId, dateFrom, dateTo, reloadTick]);
 
   // Fetch principale: cleanup guard per evitare race tra fetch sovrapposti.
   useEffect(() => {
@@ -800,6 +843,7 @@ function AdminReservationsTab({
             // (passaggio list→calendar). Senza, il calendar tornerebbe sempre
             // al mese corrente perdendo il contesto temporale.
             initialMonth={dateFrom ? dateFromIso(dateFrom) : undefined}
+            closuresByDate={closuresByDate}
           />
         </>
       ) : loading ? (

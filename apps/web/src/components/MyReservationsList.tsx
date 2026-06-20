@@ -259,6 +259,14 @@ function ReservationsTab({
   const [sort, setSort] = useState<SortState>(null);
   const [cancelTarget, setCancelTarget] = useState<MyReservation | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  // Overlay closure per il calendar: la fetch è separata da quella delle
+  // prenotazioni (endpoint user-level GET /closures, no auth admin). Il
+  // calendar mostra cella grigia + tooltip per i giorni bloccati. Click
+  // resta abilitato se l'utente ha già una prenotazione lì
+  // (gestito in SpotsCalendar via doppio classname --mine + --closed).
+  const [closuresByDate, setClosuresByDate] = useState<Map<string, string>>(
+    new Map(),
+  );
   const [datePickerLocale, setDatePickerLocale] = useState<CustomLocale | undefined>(
     undefined,
   );
@@ -306,6 +314,41 @@ function ReservationsTab({
   useEffect(() => {
     onCountChange(items.length);
   }, [items, onCountChange]);
+
+  // Fetch closures per il calendar overlay. Best-effort: se fallisce, il
+  // calendar mostra le celle senza grigio (niente notifica utente, non
+  // bloccante). Range = stesso Da/A della fetch principale (mese visualizzato
+  // in vista calendar, oppure range custom dell'utente in vista lista).
+  useEffect(() => {
+    if (!dateFrom && !dateTo) {
+      // Senza un range definito eviterei di scaricare tutte le closure di
+      // sempre. Quando l'utente non è ancora atterrato sul calendar (Da/A
+      // null), la map resta vuota — il calendar al primo render imposterà
+      // Da/A al mese e ri-triggererà questo effect.
+      setClosuresByDate(new Map());
+      return;
+    }
+    let cancelled = false;
+    api
+      .listClosures({
+        type,
+        from: dateFrom ?? undefined,
+        to: dateTo ?? undefined,
+      })
+      .then((closures) => {
+        if (cancelled) return;
+        const m = new Map<string, string>();
+        for (const c of closures) m.set(c.date, c.reason);
+        setClosuresByDate(m);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setClosuresByDate(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [type, dateFrom, dateTo, reloadTick]);
 
   // Auto-set Da/A al mese visualizzato dal SpotsCalendar — solo in vista
   // calendar. In vista lista i Da/A sono user-controlled. Quando l'utente
@@ -498,6 +541,7 @@ function ReservationsTab({
             // volta dal calendar stesso o dall'utente in vista lista). Letto
             // solo al mount → effetto al ritorno list→calendar.
             initialMonth={dateFrom ? dateFromIso(dateFrom) : undefined}
+            closuresByDate={closuresByDate}
           />
         </>
       ) : (

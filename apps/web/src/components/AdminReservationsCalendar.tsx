@@ -39,6 +39,13 @@ interface Props {
   // smontaggio/rimontaggio quando l'admin passa list→calendar→list. Default =
   // mese corrente. Tipicamente il padre passa il mese di `dateFrom` corrente.
   initialMonth?: Date;
+  // Map iso → reason delle Closure attive nel mese. Quando una cella matcha,
+  // applichiamo la classe `--closed` (sfondo grigio + pattern strisce). A
+  // differenza del calendar utente in /parking|/desks, lato admin il click
+  // resta abilitato anche su giorni bloccati: l'admin potrebbe aver
+  // necessità di vedere/cancellare prenotazioni esistenti in giorni che
+  // sono stati bloccati DOPO la creazione.
+  closuresByDate?: Map<string, string>;
 }
 
 function isoFromUtc(d: Date): string {
@@ -72,6 +79,7 @@ export function AdminReservationsCalendar({
   onDayClick,
   onMonthChange,
   initialMonth,
+  closuresByDate,
 }: Props) {
   const [currentMonth, setCurrentMonth] = useState(() =>
     initialMonth ? startOfMonthUtc(initialMonth) : startOfMonthUtc(todayUtc()),
@@ -189,12 +197,20 @@ export function AdminReservationsCalendar({
           // fetch capacity è fallita, niente --full.
           const isFull =
             totalCapacity != null && totalCapacity > 0 && count >= totalCapacity;
+          const closureReason = closuresByDate?.get(c.iso) ?? null;
+          const isClosed = closureReason !== null;
           const isToday = c.iso === todayIsoString;
+          // Per le classi: se c'è una closure attiva, l'aspetto è "bloccato"
+          // (grigio + strisce, classe condivisa con SpotsCalendar utente).
+          // `--full` e `--has-items` perdono visibilità quando isClosed —
+          // l'admin ha già il count nel badge e il colore "bloccato" è il
+          // segnale principale.
           const classes = [
             "rsv-calendar-day",
             "rsv-admin-calendar-day",
-            count > 0 && !isFull && "rsv-admin-calendar-day--has-items",
-            isFull && "rsv-admin-calendar-day--full",
+            isClosed && "rsv-calendar-day--closed",
+            !isClosed && count > 0 && !isFull && "rsv-admin-calendar-day--has-items",
+            !isClosed && isFull && "rsv-admin-calendar-day--full",
             isToday && "rsv-calendar-day--today",
           ]
             .filter(Boolean)
@@ -204,21 +220,29 @@ export function AdminReservationsCalendar({
               key={c.iso}
               type="button"
               className={classes}
+              // NOTA: a differenza del calendar utente, qui il click resta
+              // SEMPRE abilitato anche su giorni bloccati. L'admin potrebbe
+              // dover gestire prenotazioni preesistenti su giorni bloccati
+              // dopo la creazione (cancellazione, transfer).
               onClick={() => onDayClick(c.iso!)}
               aria-label={
-                isFull
-                  ? `${c.day} ${monthLabelCap}, ${count} prenotazioni — esaurito`
-                  : count > 0
-                    ? `${c.day} ${monthLabelCap}, ${count} prenotazion${count === 1 ? "e" : "i"}`
-                    : `${c.day} ${monthLabelCap}, nessuna prenotazione`
+                isClosed
+                  ? `${c.day} ${monthLabelCap}, giorno bloccato: ${closureReason}${count > 0 ? `, ${count} prenotazion${count === 1 ? "e esistente" : "i esistenti"}` : ""}`
+                  : isFull
+                    ? `${c.day} ${monthLabelCap}, ${count} prenotazioni — esaurito`
+                    : count > 0
+                      ? `${c.day} ${monthLabelCap}, ${count} prenotazion${count === 1 ? "e" : "i"}`
+                      : `${c.day} ${monthLabelCap}, nessuna prenotazione`
               }
               title={
-                isFull
-                  ? `${count} prenotazioni su ${totalCapacity} posti — esaurito`
-                  : count > 0
-                    ? `${count} prenotazion${count === 1 ? "e" : "i"}${
-                        totalCapacity ? ` su ${totalCapacity}` : ""
-                      } — clicca per vedere`
+                isClosed
+                  ? `Giorno bloccato: ${closureReason}${count > 0 ? ` — ${count} prenotazion${count === 1 ? "e esistente" : "i esistenti"}` : ""}`
+                  : isFull
+                    ? `${count} prenotazioni su ${totalCapacity} posti — esaurito`
+                    : count > 0
+                      ? `${count} prenotazion${count === 1 ? "e" : "i"}${
+                          totalCapacity ? ` su ${totalCapacity}` : ""
+                        } — clicca per vedere`
                     : "Nessuna prenotazione — clicca per filtrare la lista su questo giorno"
               }
             >

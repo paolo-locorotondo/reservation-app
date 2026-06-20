@@ -131,13 +131,13 @@ export function BookForUserDialog({ target, users, onClose, onSuccess }: Props) 
         siteId,
         floorId: floorId || undefined,
       })
-      .then((arr) => {
+      .then((res) => {
         if (cancelled) return;
-        setSpots(arr);
+        setSpots(res.items);
         // Se lo spot selezionato non è più nella lista (cambio piano/sede),
         // resetta. Se è ancora valido ma non più available, lascia: il
         // backend rifiuterà al submit con messaggio chiaro.
-        setSpotId((prev) => (prev && arr.some((s) => s.id === prev) ? prev : ""));
+        setSpotId((prev) => (prev && res.items.some((s) => s.id === prev) ? prev : ""));
       })
       .catch((e: ApiError) => {
         if (cancelled) return;

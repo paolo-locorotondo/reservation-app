@@ -110,6 +110,11 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
   const [floorId, setFloorId] = useState<string>("");
   const [date, setDate] = useState<string>(() => sanitizeInitialDate(initialDate));
   const [spots, setSpots] = useState<SpotWithAvailability[]>([]);
+  // Closure attiva per il giorno+sede correnti: quando valorizzata, la lista
+  // si svuota e mostriamo un banner "Giorno bloccato: {reason}". Il backend
+  // popola questo campo solo se l'utente ha selezionato una sede precisa
+  // (siteId !== ""); con "tutte le sedi" il check è ambiguo e quindi skipped.
+  const [closedReason, setClosedReason] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bookingTarget, setBookingTarget] = useState<BookingTarget | null>(null);
@@ -186,9 +191,10 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
     let cancelled = false;
     api
       .listSpots({ type, date, siteId, floorId: floorId || undefined })
-      .then((arr) => {
+      .then((res) => {
         if (cancelled) return;
-        setSpots(arr);
+        setSpots(res.items);
+        setClosedReason(res.closed ? res.closedReason : null);
       })
       .catch((e: ApiError) => {
         if (cancelled) return;
@@ -485,7 +491,22 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
         </IconButton>
       </div>
 
-      {!loading && rows.length > 0 && filteredRows.length === 0 && (
+      {/* Banner "Giorno bloccato" — sostituisce la lista quando la sede
+          selezionata ha una Closure attiva per la data. Distinto dal banner
+          "Nessun risultato" perché il significato è diverso: qui non è un
+          filtro troppo restrittivo, è un blocco amministrativo. */}
+      {closedReason && (
+        <InlineNotification
+          kind="warning"
+          title="Giorno bloccato"
+          subtitle={closedReason}
+          hideCloseButton
+          lowContrast
+          style={{ marginBottom: "1rem" }}
+        />
+      )}
+
+      {!loading && !closedReason && rows.length > 0 && filteredRows.length === 0 && (
         <InlineNotification
           kind="warning"
           title="Nessun risultato"
@@ -498,6 +519,10 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
 
       {loading ? (
         <InlineLoading description="Carico i posti…" />
+      ) : closedReason ? (
+        // Quando il giorno è bloccato non mostriamo la lista (sarebbe
+        // comunque vuota lato backend) — il banner sopra basta.
+        null
       ) : rows.length === 0 ? (
         <p style={{ color: "#525252" }}>Nessun posto trovato per i filtri selezionati.</p>
       ) : (
