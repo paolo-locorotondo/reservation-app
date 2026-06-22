@@ -180,6 +180,31 @@ export class ClosuresService {
   }
 
   /**
+   * Pre-fetch grezzo di TUTTE le closure nel range, senza filtri per
+   * (siteId, spotType): il chiamante fa il match in-memory. Usato dal
+   * bulk-create (ReservationsService.bulkCreate) per evitare N round-trip
+   * a Closure su 5000 candidate. Schema simmetrico al model — niente
+   * espansioni di sede/createdBy (qui non servono).
+   */
+  async findAllInRange(args: {
+    from: Date;
+    to: Date;
+  }): Promise<
+    Array<{
+      date: Date;
+      siteId: string | null;
+      spotType: SpotType | null;
+      reason: string;
+    }>
+  > {
+    return this.prisma.closure.findMany({
+      where: { date: { gte: args.from, lte: args.to } },
+      select: { date: true, siteId: true, spotType: true, reason: true },
+      orderBy: { date: "asc" },
+    });
+  }
+
+  /**
    * Variante range-based per popolare il flag `closed` nella response di
    * `listAvailability` (calendar /parking, /desks). Ritorna le closure che
    * coprono uno qualsiasi dei giorni in [from, to] con match per

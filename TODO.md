@@ -182,7 +182,7 @@ Decisione presa: **strada (a)** = prenotazioni "pre-caricate" da HR per conto de
 
 L'implementazione manuale uno-per-uno è proibitiva (5 stagisti × ~100 giorni lavorativi = 500 click) → C3 è il prerequisito UX.
 
-##### C3 — Operazioni bulk (precarico massivo prenotazioni HR) — design completo
+##### C3 — Operazioni bulk (precarico massivo prenotazioni HR) — ✅ implementato (vedi `CHANGELOG.md`)
 
 Caso d'uso: HR precarica prenotazioni per N stagisti × M giorni in onboarding. Uno-per-uno è inaccettabile.
 
@@ -217,23 +217,62 @@ Backend genera tutte le combinazioni, prova ad inserire ognuna, raccoglie succes
 
 HR vede il report in un modal post-submit, può copiarlo. **Niente transazione "tutto-o-niente"**: meglio "creo quello che posso + ti dico cosa è andato storto" che far fallire 500 inserimenti perché 1 collide.
 
-**Decisione 3 — UI: pagina dedicata `/admin/bulk-bookings`**
+**Decisione 3 — UI: modal wizard integrato in `/admin/reservations`**
 
-Form a step:
+Cambiata rispetto al design iniziale (pagina dedicata `/admin/bulk-bookings`): la pagina admin/reservations è già il punto naturale per gestire prenotazioni, integrare il bulk lì riduce il menu admin a 2 voci (Prenotazioni + Chiusure) e mantiene l'admin in un singolo posto. La preview tabellare di 500 righe sarebbe utile in pagina dedicata ma in pratica HR si fida del count "5×100=500" e legge solo il **report post-submit** (le `skipped`, di solito 10-30 righe — entrano comodamente in un modal).
+
+Bottone "Prenotazione massiva…" accanto a "Prenota per utente…" sopra la tabella. Apre Modal Carbon `size="lg"` con wizard a step:
+
 1. **Utenti** (FilterableMultiSelect)
-2. **Range date** (Da/A) + giorni della settimana (lun-ven default)
-3. **Mappatura spot**: tabella editor B oppure toggle "auto-assign" + select siteId+spotType per C
-4. **Preview**: tabella riassuntiva (es. "Creerò 5 utenti × 100 giorni = 500 prenotazioni totali, di cui ~12 su giorni già bloccati che verranno skippati")
-5. **Submit**: progress bar + report finale
+2. **Range date** Da/A + checkbox giorni della settimana (lun-ven default)
+3. **Mappatura spot**: tabella editor 1:1 (B, default) oppure toggle "auto-assign" + select siteId+spotType (C)
+4. **Submit + report**: riepilogo testuale ("5 utenti × 100 giorni = 500, ~12 saltate per chiusure festive"), bottone "Crea prenotazioni" → backend → response `{created, skipped: [{userId, date, reason}]}` → tabella skipped nel modal.
 
-Dialog modale scartato: con 500 righe la preview deve avere spazio.
+State perso al chiudere il modal → confirm dialog "Hai modifiche non salvate, chiudere comunque?".
 
-**Endpoint**: `POST /admin/reservations/bulk` body con userIds, dateRange, weekdays, mappingMode, spotMapping|spotPool. Body grande, response coi count + skipped[].
+**Endpoint**: `POST /admin/reservations/bulk` body con `userIds`, `from`, `to`, `weekdays: number[]` (0=Sun … 6=Sat, formato `Date.getDay()`), `mappingMode: "explicit"|"pool"`, `spotMapping?: Record<userId, spotId>`, `spotPool?: {siteId, spotType}`. Response `{created: N, skipped: [{userId, date, reason}]}`. Riusa la logica di `ReservationsService.create` (inclusi check Closure aggiunti in C1) con `unrestrictedDate: true` (HR può caricare nel passato e oltre MAX_DAYS_AHEAD). Cap a 5000 inserimenti per call (10 utenti × 365 giorni).
 
-**Stima**: 2-3 giornate. Sopra C1 (Closure) per skip automatico dei festivi. File toccati: nuovo `BulkReservationsController`, logica generation+ skip&report nel service, nuova pagina `/admin/bulk-bookings`, componenti per i 5 step.
+**Stima**: 2-3 giornate. File toccati: shared schema, `ReservationsService.bulkCreate`, `AdminReservationsController` (nuovo `@Post("bulk")`), nuovo `BulkBookingsDialog` component, bottone in `AdminReservationsList`.
 
-- **Priority**: 🟡 IMPORTANTE per onboarding HR, ma DOPO C1
-- **Stato**: 📐 PROGETTATO, ATTENDE C1
+- **Priority**: ✅ FATTO
+- **Stato**: ✅ IMPLEMENTATO (vedi CHANGELOG)
+
+##### C4 — Cancellazione massiva in `/admin/reservations` (DA FARE)
+
+Pattern simmetrico al bulk-delete già fatto in `/admin/closures`. In `/admin/reservations` vista Lista:
+- Backend: nuovo `POST /admin/reservations/bulk-cancel` body `{ids: string[]}` → `prisma.reservation.updateMany({where: {id: {in}}, data: {status: "CANCELLED"}})`. Idempotente, ritorna `{cancelled: N}`. Solo righe ACTIVE vengono toccate (le già-CANCELLED restano).
+- Frontend: `TableSelectAll` + `TableSelectRow` (selezione disabilitata sulle righe CANCELLED — niente azione utile), bottone "Cancella selezionate (N)" `kind="danger--tertiary"` visibile con N>0, modal di conferma plurale. Selezione resettata al cambio filtri / reloadTick.
+- Stima: ~1 giornata.
+
+- **Priority**: 🟢 utile per pulizia di prenotazioni errate / fine onboarding
+- **Stato**: 🔴 TODO
+
+##### C5 — Audit `createdBy` / `cancelledBy` su Reservation (DA FARE)
+
+Tracciare CHI ha fatto cosa su una prenotazione (oggi non sappiamo se una prenotazione l'ha creata l'utente, un admin "per conto di", o un bulk; né chi l'ha cancellata).
+
+Schema:
+```prisma
+model Reservation {
+  ...
+  createdByUserId   String?  // null = legacy; valorizzato d'ora in poi
+  cancelledByUserId String?  // valorizzato solo quando status=CANCELLED
+}
+```
+
+Logica di popolamento:
+- `create()` self-service → `createdByUserId = userId`.
+- `adminCreate` (Prenota per utente) + `bulkCreate` → `createdByUserId = admin.id`.
+- `cancel()` self-service → `cancelledByUserId = userId`.
+- `cancel()` admin → `cancelledByUserId = admin.id` (oggi il param `userId` di cancel è già l'admin chiamante quando `isAdmin`).
+- `adminUpdate` (transfer): `createdByUserId` invariato (è cambio intestatario, non nuova creazione); valutare un campo storico a parte se serve audit del transfer.
+
+UI: 2 colonne sortable "Creata da" / "Cancellata da" in `/admin/reservations` (displayName o "—"/"Sistema" per legacy NULL).
+
+Migration: 2 colonne nullable + eventuali indici se filtreremo per autore. Niente backfill (legacy → NULL → "—").
+
+- **Priority**: 🟡 MED (compliance/tracciabilità, utile prima del go-live aziendale)
+- **Stato**: 🔴 TODO
 
 #### Azioni admin (next step concreti, su `/admin/reservations`)
 
@@ -242,7 +281,9 @@ Dialog modale scartato: con 500 righe la preview deve avere spazio.
 - ✅ **Trasferisci prenotazione (cambio intestatario)** (vedi `CHANGELOG.md` 2026-06-20): atomico via `PATCH /admin/reservations/:id`, riuso dello stesso modale di cancel.
 - ✅ **Override vincoli temporali per admin**: l'admin può prenotare per date nel passato (inserimento storico HR) e oltre `MAX_DAYS_AHEAD`. Implementato via opt `unrestrictedDate` su `SpotsService.list` e `ReservationsService.create` (vedi CHANGELOG 2026-06-20).
 - ✅ **Blocca giorno (Chiusure)** (parte di C, vedi `CHANGELOG.md` 2026-06-20).
-- **Bulk pre-carico HR** (parte di C — vedi sezione **C3** sopra: design completo, attende implementazione).
+- ✅ **Bulk pre-carico HR** (parte di C, vedi `CHANGELOG.md`): modal wizard in `/admin/reservations`.
+- **Cancellazione massiva** (vedi sezione **C4**: bulk-cancel righe selezionate in /admin/reservations).
+- **Audit createdBy/cancelledBy** (vedi sezione **C5**).
 - **Cancellazione retroattiva al blocco** (vedi sezione **C1.1**: aspetta canale notifiche aziendale).
 - **Sezione config** parametri DB-level (parte di C, decisione Q3 dice "non ora — env").
 - **Export** CSV / Excel — fase 2, dopo che la pagina vede uso reale.

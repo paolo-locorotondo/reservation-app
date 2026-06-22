@@ -4,6 +4,8 @@ import type {
   SpotType,
   SpotWithAvailability,
   SpotsAvailabilityDay,
+  AdminBulkCreateReservationsDto,
+  AdminBulkCreateReservationsResponse,
   AdminCreateReservationDto,
   CreateReservationDto,
   Reservation,
@@ -205,6 +207,14 @@ export const api = {
   // create utente normale (regole business) + ruolo ADMIN richiesto.
   adminCreateReservation: (dto: AdminCreateReservationDto) =>
     call<Reservation>("/admin/reservations", {
+      method: "POST",
+      body: JSON.stringify(dto),
+    }),
+  // Admin: caricamento massivo (pre-carico HR per N utenti × M giorni).
+  // Response `{created, skipped: [{userId, date, reason}]}` — skip & report,
+  // non transazionale. Cap server-side a 5000 inserimenti per call.
+  adminBulkCreateReservations: (dto: AdminBulkCreateReservationsDto) =>
+    call<AdminBulkCreateReservationsResponse>("/admin/reservations/bulk", {
       method: "POST",
       body: JSON.stringify(dto),
     }),

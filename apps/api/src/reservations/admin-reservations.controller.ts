@@ -18,9 +18,11 @@ import { Roles } from "../auth/roles.decorator";
 import { RolesGuard } from "../auth/roles.guard";
 import { ZodValidationPipe } from "../common/zod-validation.pipe";
 import {
+  AdminBulkCreateReservationsSchema,
   AdminCreateReservationSchema,
   AdminReservationsQuerySchema,
   AdminUpdateReservationSchema,
+  type AdminBulkCreateReservationsDto,
   type AdminCreateReservationDto,
   type AdminReservationsQuery,
   type AdminUpdateReservationDto,
@@ -62,6 +64,17 @@ export class AdminReservationsController {
       { spotId: dto.spotId, date: dto.date },
       { unrestrictedDate: true },
     );
+  }
+
+  // Caricamento massivo (pre-carico HR): N utenti × M giorni in una call.
+  // Skip & report: non transazionale, ogni create fallita finisce in
+  // `response.skipped[]` con motivo. Vedi `ReservationsService.bulkCreate`.
+  @Post("bulk")
+  bulkCreate(
+    @Body(new ZodValidationPipe(AdminBulkCreateReservationsSchema))
+    dto: AdminBulkCreateReservationsDto,
+  ) {
+    return this.reservations.bulkCreate(dto);
   }
 
   // Trasferisce una prenotazione attiva a un altro utente (cambio intestatario).

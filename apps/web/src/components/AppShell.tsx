@@ -56,7 +56,6 @@ const NAV: NavItem[] = [
     children: [
       { label: "Prenotazioni", href: "/admin/reservations", Icon: Group },
       { label: "Chiusure", href: "/admin/closures", Icon: Group },
-      { label: "Caricamento massivo", href: "/admin/bulk-bookings", Icon: Group },
     ],
   },
 ];

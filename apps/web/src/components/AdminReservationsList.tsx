@@ -49,6 +49,7 @@ import {
 import { FiltersPanel } from "./FiltersPanel";
 import { AdminReservationsCalendar } from "./AdminReservationsCalendar";
 import { BookForUserDialog, type BookForUserTarget } from "./BookForUserDialog";
+import { BulkBookingsDialog } from "./BulkBookingsDialog";
 
 // HEADERS della tabella per-tab. Niente colonna "Tipo": è già discriminata
 // dal Tab attivo. La cancellazione avviene cliccando direttamente la riga
@@ -138,6 +139,13 @@ export function AdminReservationsList() {
   const [parkingCount, setParkingCount] = useState<number | null>(null);
   const [deskCount, setDeskCount] = useState<number | null>(null);
 
+  // Tick di reload globale incrementato dopo un bulk-create: il bulk crea
+  // prenotazioni di tipo arbitrario (PARKING e/o DESK), quindi DEVE refreshare
+  // ENTRAMBI i tab + tutte le viste, non solo quello da cui è partito.
+  // Passato a tutti e due gli AdminReservationsTab e incluso nelle deps dei
+  // loro fetch effect.
+  const [bulkReloadTick, setBulkReloadTick] = useState(0);
+
   useEffect(() => {
     api
       .listAdminUsers()
@@ -146,6 +154,7 @@ export function AdminReservationsList() {
   }, [usersReloadTick]);
 
   const reloadUsers = () => setUsersReloadTick((t) => t + 1);
+  const handleBulkDone = () => setBulkReloadTick((t) => t + 1);
 
   return (
     <main>
@@ -195,6 +204,8 @@ export function AdminReservationsList() {
               onSwitchToList={() => setView("list")}
               onReloadUsers={reloadUsers}
               onCountChange={setParkingCount}
+              bulkReloadTick={bulkReloadTick}
+              onBulkDone={handleBulkDone}
             />
           </TabPanel>
           <TabPanel>
@@ -206,6 +217,8 @@ export function AdminReservationsList() {
               onSwitchToList={() => setView("list")}
               onReloadUsers={reloadUsers}
               onCountChange={setDeskCount}
+              bulkReloadTick={bulkReloadTick}
+              onBulkDone={handleBulkDone}
             />
           </TabPanel>
         </TabPanels>
@@ -227,6 +240,12 @@ interface AdminReservationsTabProps {
   // Usato dal padre per popolare la label del tab "Posti auto (N)" /
   // "Scrivanie (N)".
   onCountChange: (count: number) => void;
+  // Tick di reload globale (incrementato dal padre dopo un bulk-create):
+  // incluso nelle deps dei fetch così entrambi i tab si aggiornano.
+  bulkReloadTick: number;
+  // Chiamato dopo un bulk-create andato a buon fine: il padre incrementa
+  // `bulkReloadTick` per refreshare entrambi i tab.
+  onBulkDone: () => void;
 }
 
 // Sotto-componente per il contenuto di un tab. Stato dei filtri indipendente
@@ -239,6 +258,8 @@ function AdminReservationsTab({
   onSwitchToList,
   onReloadUsers,
   onCountChange,
+  bulkReloadTick,
+  onBulkDone,
 }: AdminReservationsTabProps) {
   const [sites, setSites] = useState<Site[]>([]);
   const [floors, setFloors] = useState<Floor[]>([]);
@@ -278,6 +299,9 @@ function AdminReservationsTab({
   // Dialog "Prenota per utente": target null = chiuso, oggetto = aperto con
   // tipo (e opzionale data preimpostata).
   const [bookTarget, setBookTarget] = useState<BookForUserTarget | null>(null);
+  // Dialog "Prenotazione massiva": il wizard si auto-gestisce internamente
+  // (steps, fetch lookup spots, submit), serve solo aprire/chiudere.
+  const [bulkOpen, setBulkOpen] = useState(false);
   // Map iso → reason delle Closure attive nel range Da/A correnti, filtrato
   // per (siteId, type) del tab. Passato al calendar admin come overlay
   // visivo (cella grigia + tooltip "Giorno bloccato"). Best-effort: se la
@@ -388,7 +412,7 @@ function AdminReservationsTab({
     return () => {
       cancelled = true;
     };
-  }, [type, siteId, dateFrom, dateTo, reloadTick]);
+  }, [type, siteId, dateFrom, dateTo, reloadTick, bulkReloadTick]);
 
   // Fetch principale: cleanup guard per evitare race tra fetch sovrapposti.
   useEffect(() => {
@@ -435,6 +459,7 @@ function AdminReservationsTab({
     dateTo,
     selectedUserIds,
     reloadTick,
+    bulkReloadTick,
   ]);
 
   // Propaga il count corrente al padre per le label dei tab "Posti auto (N)"
@@ -622,6 +647,19 @@ function AdminReservationsTab({
     setReloadTick((t) => t + 1);
   }
 
+  // Bulk-create success: chiamato DURANTE l'apertura del modal (mostra report
+  // skipped). Triggera il reload globale (entrambi i tab) via `onBulkDone`,
+  // ma NON imposta un banner di pagina: il report nel modal È già il feedback
+  // ricco (created + skipped), e un banner persisterebbe sopra la
+  // lista/calendar anche dopo la chiusura del modal (segnalato come fastidioso
+  // nei test). L'admin legge il report nel modal e chiude.
+  function handleBulkSuccess(createdCount: number) {
+    if (createdCount > 0) {
+      setReloadTick((t) => t + 1); // refresh del tab corrente
+      onBulkDone(); // refresh dell'altro tab via parent
+    }
+  }
+
   return (
     <div className={`rsv-spot-tab rsv-spot-tab--${type.toLowerCase()}`}>
       <FiltersPanel summary={filtersSummary} activeCount={filtersActiveCount}>
@@ -756,18 +794,29 @@ function AdminReservationsTab({
           flexWrap: "wrap",
         }}
       >
-        {/* Azione "Prenota per utente": visibile solo in vista Lista. In
-            vista Calendario non avrebbe contesto (l'admin sceglie giorno e
-            poi cliccare attiva il flusso normale di switch a Lista). */}
+        {/* Azioni "Prenota per utente" (singola) e "Prenotazione massiva"
+            (wizard). Visibili solo in vista Lista. In vista Calendario non
+            avrebbero contesto (l'admin sceglie giorno e poi cliccare attiva
+            il flusso normale di switch a Lista). */}
         {view === "list" ? (
-          <Button
-            kind="tertiary"
-            size="sm"
-            renderIcon={Add}
-            onClick={openBookDialog}
-          >
-            Prenota per utente…
-          </Button>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <Button
+              kind="tertiary"
+              size="sm"
+              renderIcon={Add}
+              onClick={openBookDialog}
+            >
+              Prenota per utente…
+            </Button>
+            <Button
+              kind="tertiary"
+              size="sm"
+              renderIcon={Add}
+              onClick={() => setBulkOpen(true)}
+            >
+              Prenotazione massiva…
+            </Button>
+          </div>
         ) : (
           <span /> // placeholder per mantenere space-between con il Renew
         )}
@@ -1076,6 +1125,15 @@ function AdminReservationsTab({
         users={users}
         onClose={() => setBookTarget(null)}
         onSuccess={handleBookSuccess}
+      />
+
+      <BulkBookingsDialog
+        open={bulkOpen}
+        users={users}
+        onClose={() => setBulkOpen(false)}
+        onSuccess={handleBulkSuccess}
+        initialFrom={dateFrom}
+        initialTo={dateTo}
       />
     </div>
   );

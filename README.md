@@ -1,19 +1,19 @@
 # Reservation App
 
-Web app per la prenotazione di **posti auto** nel parcheggio aziendale e di **scrivanie** negli uffici. Auth SSO con Microsoft Entra ID.
+Web app per la prenotazione di **posti auto** nel parcheggio aziendale e di **scrivanie** negli uffici.
 
-> Stato: **Sprint 0 — Bootstrap** completato. Auth e prenotazioni nei prossimi sprint.
+Autenticazione:
+- AS IS: Google OAuth
+- TO BE: Auth SSO con Microsoft Entra ID.
 
 ## Stack
 
 - **Monorepo** [pnpm workspaces](pnpm-workspace.yaml)
-- **Backend** [NestJS](apps/api/) (TypeScript) + [Prisma](apps/api/prisma/schema.prisma) + PostgreSQL
-- **Frontend** [Next.js](apps/web/) (App Router) + [IBM Carbon Design System](https://carbondesignsystem.com/)
+- **Frontend** [web](apps/web/) (NestJS App Router) + [IBM Carbon Design System](https://carbondesignsystem.com/)
+- **Backend** [api](apps/api/) (NestJS TypeScript) + [Prisma](apps/api/prisma/schema.prisma) + PostgreSQL
 - **Schemi condivisi** [`packages/shared`](packages/shared/) (Zod)
-- **Auth** Microsoft Entra ID via NextAuth, pattern BFF (token mai esposti al browser)
+- **Auth** via NextAuth, pattern BFF (token mai esposti al browser)
 - **Dev infra** Docker Compose (Postgres + Adminer)
-
-Vedi il piano completo in [twinkling-humming-whisper.md](../../../.claude/plans/twinkling-humming-whisper.md).
 
 ## Prerequisiti
 
@@ -65,6 +65,9 @@ reservation-app/
 ├── docker-compose.yml        # Postgres + Adminer
 └── .env.example
 ```
+
+## Authorization Matrix
+In questo documento [AUTHORIZATION_MATRIX](docs/AUTHORIZATION_MATRIX.md) viene manutenuta la matrice di autorizzazione, quindi per ogni pagina servita e per ogni API, viene fornita una tabella dove per ogni ruolo viene evidenziato se è consentito o meno l'accesso/utilizzo.
 
 ## Comandi root utili
 

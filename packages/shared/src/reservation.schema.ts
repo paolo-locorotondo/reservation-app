@@ -44,6 +44,97 @@ export const AdminUpdateReservationSchema = z.object({
 });
 export type AdminUpdateReservationDto = z.infer<typeof AdminUpdateReservationSchema>;
 
+// Admin: caricamento massivo prenotazioni (pre-carico HR per stagisti/nuovi
+// assunti). Genera N×M inserimenti dove N=utenti, M=giorni del range che
+// matchano i weekdays. Skip & report: ogni create fallita (Closure attiva,
+// vincolo unique, spot non disponibile) viene saltata e ritornata in
+// `skipped[]` con motivo. Riusa `ReservationsService.create()` per ciascuna
+// combinazione, con `unrestrictedDate: true` (HR può caricare passato/futuro).
+//
+// Cap: 5000 inserimenti totali per call (10 utenti × 365 giorni). Sopra →
+// 400 "operazione troppo grande". `weekdays` segue il formato di
+// `Date.getDay()`: 0=Dom, 1=Lun, 2=Mar, 3=Mer, 4=Gio, 5=Ven, 6=Sab. Vuoto =
+// tutti i giorni (raro ma valido per copertura totale).
+//
+// Mapping spot:
+//  - mode="explicit": `spotMapping` Record<userId, spotId> (default UI;
+//    HR sa "Mario→P-15, Luigi→P-16")
+//  - mode="pool": `spotPool` {siteId, spotType}, backend assegna il primo
+//    libero per ogni (utente, data) — non deterministico ma rapido
+export const BULK_RESERVATIONS_MAX_INSERTS = 5000;
+
+const WeekdaySchema = z.number().int().min(0).max(6);
+
+export const AdminBulkCreateReservationsSchema = z
+  .object({
+    userIds: z.array(z.string().min(1)).min(1, "almeno un utente"),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "from must be YYYY-MM-DD"),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "to must be YYYY-MM-DD"),
+    // Default UI: lun-ven [1,2,3,4,5]. Array vuoto = tutti i giorni.
+    weekdays: z.array(WeekdaySchema).max(7),
+    mode: z.enum(["explicit", "pool"]),
+    // Quando mode="explicit": deve esistere una entry per OGNI userId.
+    // Validazione cross-field nel `.superRefine` sotto.
+    spotMapping: z.record(z.string().min(1)).optional(),
+    // Quando mode="pool": siteId+spotType obbligatori.
+    spotPool: z
+      .object({
+        siteId: z.string().min(1),
+        spotType: SpotTypeSchema,
+      })
+      .optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.mode === "explicit") {
+      if (!data.spotMapping) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "spotMapping richiesto per mode=explicit",
+          path: ["spotMapping"],
+        });
+        return;
+      }
+      for (const uid of data.userIds) {
+        if (!data.spotMapping[uid]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `mapping mancante per l'utente ${uid}`,
+            path: ["spotMapping", uid],
+          });
+        }
+      }
+    } else if (data.mode === "pool") {
+      if (!data.spotPool) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "spotPool richiesto per mode=pool",
+          path: ["spotPool"],
+        });
+      }
+    }
+  });
+export type AdminBulkCreateReservationsDto = z.infer<
+  typeof AdminBulkCreateReservationsSchema
+>;
+
+// Response del bulk-create: count effettivamente creato + lista delle
+// combinazioni saltate. `skipped` è ordered per (userId, date) per coerenza
+// di lettura nel report HR.
+export const BulkSkippedItemSchema = z.object({
+  userId: z.string(),
+  date: z.string(),
+  reason: z.string(),
+});
+export type BulkSkippedItem = z.infer<typeof BulkSkippedItemSchema>;
+
+export const AdminBulkCreateReservationsResponseSchema = z.object({
+  created: z.number().int().nonnegative(),
+  skipped: z.array(BulkSkippedItemSchema),
+});
+export type AdminBulkCreateReservationsResponse = z.infer<
+  typeof AdminBulkCreateReservationsResponseSchema
+>;
+
 // Query string di /reservations/me. Tutti i parametri opzionali; quando
 // presenti restringono il dataset (e quindi anche il `truncated` flag della
 // response). `type` permette di chiedere solo PARKING o solo DESK — usato

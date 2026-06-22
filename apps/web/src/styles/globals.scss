@@ -167,6 +167,52 @@ main {
   }
 }
 
+// Modal full-screen per wizard a step (es. BulkBookingsDialog). Carbon
+// `size="lg"` arriva fino a ~70vw, ma per un wizard a 4 step con tabelle e
+// preview multi-utente serve TUTTO lo schermo. Forziamo il container interno
+// (`cds--modal-container`) a riempire la viewport. Lasciamo padding piccolo
+// in alto/basso per non incollarsi ai bordi e conservare lo shadow Carbon.
+.rsv-modal-fullscreen .cds--modal-container {
+  max-width: 100vw;
+  width: 100vw;
+  // `dvh` (dynamic viewport height) tiene conto della toolbar del browser
+  // mobile, che con `vh` resterebbe "sotto" il viewport visibile spingendo
+  // il footer (bottoni Annulla/Avanti) fuori schermo. Fallback `vh` per
+  // browser senza supporto dvh.
+  max-height: 100vh;
+  height: 100vh;
+  max-height: 100dvh;
+  height: 100dvh;
+  // Layout a colonna con footer pinnato: il content scrolla, header e footer
+  // restano sempre visibili. Senza questo, il content lungo dello step
+  // spingerebbe i bottoni oltre il fondo del modal.
+  display: flex;
+  flex-direction: column;
+  .cds--modal-content {
+    flex: 1 1 auto;
+    max-height: none;
+    overflow-y: auto;
+  }
+  .cds--modal-footer {
+    flex: 0 0 auto;
+  }
+}
+
+// Griglia Da/A dello step 2 del BulkBookingsDialog. `auto-fit + minmax`
+// così le due celle collassano a 1 colonna quando la viewport è stretta
+// (mobile): senza, il `1fr 1fr` fisso + min-width intrinseca del DatePicker
+// flatpickr + bottone X forzava scroll orizzontale dentro al modal.
+.rsv-bulk-date-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  // Le celle devono potersi restringere sotto la larghezza intrinseca del
+  // DatePicker, altrimenti l'auto-fit non collassa mai.
+  & > * {
+    min-width: 0;
+  }
+}
+
 // Layout filtri admin organizzato in righe semantiche esplicite (Sede/Piano/Zona,
 // Stato/Da/A, Utenti). Ogni `.rsv-filter-row` distribuisce i suoi campi a piena
 // larghezza con `auto-fit + minmax(200px, 1fr)`: se lo schermo non basta a

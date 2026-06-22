@@ -9,11 +9,16 @@ import { PrismaService } from "../prisma/prisma.service";
 import { MAX_DAYS_AHEAD } from "../common/business-rules";
 import {
   ADMIN_RESERVATIONS_LIST_LIMIT,
+  BULK_RESERVATIONS_MAX_INSERTS,
   MY_RESERVATIONS_LIST_LIMIT,
+  type AdminBulkCreateReservationsDto,
+  type AdminBulkCreateReservationsResponse,
   type AdminReservationsQuery,
+  type BulkSkippedItem,
   type CreateReservationDto,
   type ReservationsRangeQuery,
 } from "@reservation/shared";
+import type { SpotType } from "@prisma/client";
 import { ClosuresService } from "../closures/closures.service";
 
 // Lookup env-based con fallback alla costante shared. Pattern simmetrico a
@@ -34,6 +39,10 @@ const ADMIN_LIST_LIMIT = envInt(
 const MY_LIST_LIMIT = envInt(
   "MY_RESERVATIONS_LIST_LIMIT",
   MY_RESERVATIONS_LIST_LIMIT,
+);
+const BULK_MAX_INSERTS = envInt(
+  "BULK_RESERVATIONS_MAX_INSERTS",
+  BULK_RESERVATIONS_MAX_INSERTS,
 );
 
 @Injectable()
@@ -232,6 +241,339 @@ export class ReservationsService {
   }
 
   /**
+   * Admin: caricamento massivo prenotazioni (pre-carico HR per stagisti/nuovi
+   * assunti). Genera N×M inserimenti dove N=utenti, M=giorni del range che
+   * matchano i `weekdays`. **Skip & report**: ogni create fallita (Closure
+   * attiva, vincolo unique giorno+tipo, spot non disponibile, ecc.) viene
+   * saltata e ritornata in `skipped[]` con motivo. Niente transazione
+   * tutto-o-niente: meglio "creo quello che posso + ti dico cosa è andato
+   * storto" che far fallire 500 inserimenti perché 1 collide.
+   *
+   * Performance: pre-fetch in 3 query (spots, closures, prenotazioni
+   * esistenti) + check in-memory per ogni candidate → 1 INSERT per ogni
+   * candidate non saltata. Su 5000 candidate ~5-10s su Supabase, accettabile
+   * per uso HR (operazione infrequente, asincrona dal punto di vista admin).
+   *
+   * Date interpretate come `unrestrictedDate`: l'admin può caricare nel
+   * passato (record storici) e oltre MAX_DAYS_AHEAD (pre-carico anno
+   * successivo), coerente con gli altri endpoint admin.
+   */
+  async bulkCreate(
+    dto: AdminBulkCreateReservationsDto,
+  ): Promise<AdminBulkCreateReservationsResponse> {
+    const from = parseDateOnly(dto.from);
+    const to = parseDateOnly(dto.to);
+    if (to.getTime() < from.getTime()) {
+      throw new BadRequestException("'to' deve essere uguale o successiva a 'from'");
+    }
+
+    // 1) Genera le date del range che matchano i `weekdays`. `weekdays` vuoto
+    //    = tutti i giorni (raro ma valido). Formato `getUTCDay()` 0=Dom…6=Sab.
+    const wd = new Set(
+      dto.weekdays.length > 0 ? dto.weekdays : [0, 1, 2, 3, 4, 5, 6],
+    );
+    const matchingDates: Date[] = [];
+    for (let t = from.getTime(); t <= to.getTime(); t += 86_400_000) {
+      const d = new Date(t);
+      if (wd.has(d.getUTCDay())) matchingDates.push(d);
+    }
+
+    // 2) Cap totale: protegge da operazioni runaway (anno × 100 utenti = 36k
+    //    insert). HR vede 400 e capisce di restringere il range/utenti.
+    const totalCandidates = dto.userIds.length * matchingDates.length;
+    if (totalCandidates > BULK_MAX_INSERTS) {
+      throw new BadRequestException(
+        `operazione troppo grande: ${totalCandidates} inserimenti (max ${BULK_MAX_INSERTS}). Restringi il range di date o gli utenti.`,
+      );
+    }
+    if (totalCandidates === 0) {
+      return { created: 0, skipped: [] };
+    }
+
+    // 3) Pre-fetch spots che ci serviranno (mapping diretto o pool).
+    type SpotInfo = {
+      id: string;
+      type: SpotType;
+      active: boolean;
+      siteId: string;
+    };
+    const spotById = new Map<string, SpotInfo>();
+    let poolSpotIds: string[] = [];
+    if (dto.mode === "explicit") {
+      const ids = Array.from(new Set(Object.values(dto.spotMapping!)));
+      const spots = await this.prisma.spot.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true,
+          type: true,
+          active: true,
+          floor: { select: { siteId: true } },
+        },
+      });
+      for (const s of spots) {
+        spotById.set(s.id, {
+          id: s.id,
+          type: s.type,
+          active: s.active,
+          siteId: s.floor.siteId,
+        });
+      }
+    } else {
+      // mode === "pool"
+      const pool = await this.prisma.spot.findMany({
+        where: {
+          type: dto.spotPool!.spotType,
+          active: true,
+          floor: { siteId: dto.spotPool!.siteId },
+        },
+        select: {
+          id: true,
+          type: true,
+          active: true,
+          floor: { select: { siteId: true } },
+        },
+        orderBy: { code: "asc" },
+      });
+      for (const s of pool) {
+        spotById.set(s.id, {
+          id: s.id,
+          type: s.type,
+          active: s.active,
+          siteId: s.floor.siteId,
+        });
+        poolSpotIds.push(s.id);
+      }
+    }
+
+    // 4) Pre-fetch closure nel range — match locale via predicate.
+    const closures = await this.closures.findAllInRange({ from, to });
+    const closureMatch = (
+      date: Date,
+      siteId: string,
+      spotType: SpotType,
+    ): string | null => {
+      const dateMs = date.getTime();
+      for (const c of closures) {
+        if (c.date.getTime() !== dateMs) continue;
+        if (c.siteId !== null && c.siteId !== siteId) continue;
+        if (c.spotType !== null && c.spotType !== spotType) continue;
+        return c.reason;
+      }
+      return null;
+    };
+
+    // 5) Pre-fetch prenotazioni ACTIVE esistenti degli utenti nel range.
+    //    Servono per il vincolo "max 1 ACTIVE per (user, date, spotType)".
+    //    Inoltre teniamo traccia degli spot già occupati per (spotId, date)
+    //    per il vincolo "max 1 ACTIVE per (spotId, date)".
+    const existing = await this.prisma.reservation.findMany({
+      where: {
+        userId: { in: dto.userIds },
+        date: { gte: from, lte: to },
+        status: "ACTIVE",
+      },
+      select: { userId: true, date: true, spotType: true, spotId: true },
+    });
+    // Map "userId|isoDate" → Set<SpotType> per check user/date/type.
+    const userDateTypes = new Map<string, Set<SpotType>>();
+    // Map isoDate → Set<spotId> per check spot/date.
+    const spotsTakenByDate = new Map<string, Set<string>>();
+    for (const r of existing) {
+      const iso = isoFromUtc(r.date);
+      const uKey = `${r.userId}|${iso}`;
+      let uSet = userDateTypes.get(uKey);
+      if (!uSet) {
+        uSet = new Set();
+        userDateTypes.set(uKey, uSet);
+      }
+      uSet.add(r.spotType);
+      let sSet = spotsTakenByDate.get(iso);
+      if (!sSet) {
+        sSet = new Set();
+        spotsTakenByDate.set(iso, sSet);
+      }
+      sSet.add(r.spotId);
+    }
+    // Pre-fetch anche le prenotazioni ACTIVE sugli spot del pool/mapping da
+    // PARTE di OGNI utente (non solo userIds): servono per il vincolo
+    // "max 1 ACTIVE per (spotId, date)" anche quando uno spot è occupato da
+    // qualcuno fuori dal nostro batch.
+    const allSpotIds = Array.from(spotById.keys());
+    if (allSpotIds.length > 0) {
+      const otherTaken = await this.prisma.reservation.findMany({
+        where: {
+          spotId: { in: allSpotIds },
+          date: { gte: from, lte: to },
+          status: "ACTIVE",
+        },
+        select: { date: true, spotId: true },
+      });
+      for (const r of otherTaken) {
+        const iso = isoFromUtc(r.date);
+        let s = spotsTakenByDate.get(iso);
+        if (!s) {
+          s = new Set();
+          spotsTakenByDate.set(iso, s);
+        }
+        s.add(r.spotId);
+      }
+    }
+
+    // 6) Genera candidati + esegui check in-memory. Aggiungiamo a `toCreate[]`
+    //    e aggiorniamo gli state in-memory per propagare i blocchi (es.
+    //    una volta che uno spot del pool è stato assegnato per una data,
+    //    non lo possiamo riusare per un'altra coppia (user, stessa data)).
+    const toCreate: Array<{
+      userId: string;
+      spotId: string;
+      spotType: SpotType;
+      date: Date;
+    }> = [];
+    const skipped: BulkSkippedItem[] = [];
+
+    for (const userId of dto.userIds) {
+      for (const date of matchingDates) {
+        const dateIso = isoFromUtc(date);
+        // Determina spot candidato per questo (user, date).
+        let chosen: SpotInfo | null = null;
+        if (dto.mode === "explicit") {
+          const sid = dto.spotMapping![userId];
+          const info = spotById.get(sid);
+          if (!info) {
+            skipped.push({ userId, date: dateIso, reason: "posto non trovato" });
+            continue;
+          }
+          if (!info.active) {
+            skipped.push({ userId, date: dateIso, reason: "posto non attivo" });
+            continue;
+          }
+          chosen = info;
+        } else {
+          // Pool: primo spot della sede/tipo non ancora occupato per quella data.
+          const takenForDate = spotsTakenByDate.get(dateIso);
+          for (const sid of poolSpotIds) {
+            if (!takenForDate?.has(sid)) {
+              chosen = spotById.get(sid) ?? null;
+              break;
+            }
+          }
+          if (!chosen) {
+            skipped.push({
+              userId,
+              date: dateIso,
+              reason: "nessun posto disponibile nel pool per questa data",
+            });
+            continue;
+          }
+        }
+
+        // Check Closure.
+        const closedReason = closureMatch(date, chosen.siteId, chosen.type);
+        if (closedReason) {
+          skipped.push({ userId, date: dateIso, reason: `giorno bloccato: ${closedReason}` });
+          continue;
+        }
+
+        // Check user/date/type unique.
+        const uKey = `${userId}|${dateIso}`;
+        const uTypes = userDateTypes.get(uKey);
+        if (uTypes?.has(chosen.type)) {
+          skipped.push({
+            userId,
+            date: dateIso,
+            reason:
+              chosen.type === "PARKING"
+                ? "utente ha già un posto auto per questa data"
+                : "utente ha già una scrivania per questa data",
+          });
+          continue;
+        }
+
+        // Check spotId/date unique.
+        const sTaken = spotsTakenByDate.get(dateIso);
+        if (sTaken?.has(chosen.id)) {
+          skipped.push({
+            userId,
+            date: dateIso,
+            reason: "posto già prenotato per questa data",
+          });
+          continue;
+        }
+
+        // OK: aggiungi a toCreate + aggiorna state in-memory.
+        toCreate.push({
+          userId,
+          spotId: chosen.id,
+          spotType: chosen.type,
+          date,
+        });
+        let uSet = userDateTypes.get(uKey);
+        if (!uSet) {
+          uSet = new Set();
+          userDateTypes.set(uKey, uSet);
+        }
+        uSet.add(chosen.type);
+        let sSet = spotsTakenByDate.get(dateIso);
+        if (!sSet) {
+          sSet = new Set();
+          spotsTakenByDate.set(dateIso, sSet);
+        }
+        sSet.add(chosen.id);
+      }
+    }
+
+    // 7) Insert. `createMany` è atomico ma se uno fallisce per P2002 (race con
+    //    altri admin che inseriscono nel frattempo) tutto fallisce. Per skip &
+    //    report tolleriamo race: fallback a insert sequenziali con catch.
+    let created = 0;
+    if (toCreate.length > 0) {
+      try {
+        const r = await this.prisma.reservation.createMany({
+          data: toCreate.map((t) => ({
+            userId: t.userId,
+            spotId: t.spotId,
+            spotType: t.spotType,
+            date: t.date,
+            status: "ACTIVE",
+          })),
+        });
+        created = r.count;
+      } catch {
+        // Fallback: insert una per una, catturando i singoli P2002.
+        for (const t of toCreate) {
+          try {
+            await this.prisma.reservation.create({
+              data: {
+                userId: t.userId,
+                spotId: t.spotId,
+                spotType: t.spotType,
+                date: t.date,
+                status: "ACTIVE",
+              },
+            });
+            created++;
+          } catch (e) {
+            const reason =
+              e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002"
+                ? "race con altra prenotazione concorrente"
+                : "errore database";
+            skipped.push({ userId: t.userId, date: isoFromUtc(t.date), reason });
+          }
+        }
+      }
+    }
+
+    // Sort skipped per leggibilità nel report HR.
+    skipped.sort((a, b) =>
+      a.date === b.date
+        ? a.userId.localeCompare(b.userId)
+        : a.date.localeCompare(b.date),
+    );
+
+    return { created, skipped };
+  }
+
+  /**
    * Lista globale prenotazioni — usata dalla pagina admin (read-only, accesso
    * limitato dal RolesGuard nel controller). Filtri tutti opzionali. NON
    * applichiamo un default su `status`: il client decide cosa mostrare.
@@ -392,4 +734,14 @@ function parseDateOnly(yyyyMmDd: string): Date {
     throw new BadRequestException("data non valida");
   }
   return date;
+}
+
+// Inversa di `parseDateOnly` quando serve emettere la data come ISO compatto
+// (YYYY-MM-DD) — es. nelle skipped[] del bulk-create, per match col formato
+// di input del client.
+function isoFromUtc(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }

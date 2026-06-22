@@ -2,6 +2,37 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-22 — Caricamento massivo prenotazioni (bulk) + matrice autorizzazioni
+
+Feature per il pre-carico HR: l'admin crea N×M prenotazioni (N utenti × M giorni) in una sola operazione guidata, con strategia "skip & report". Più la documentazione della matrice di autorizzazione.
+
+### Backend — bulk create
+
+- **`POST /admin/reservations/bulk`** ([`admin-reservations.controller.ts`](apps/api/src/reservations/admin-reservations.controller.ts), `RolesGuard ADMIN`) → [`ReservationsService.bulkCreate`](apps/api/src/reservations/reservations.service.ts). Schema [`AdminBulkCreateReservationsSchema`](packages/shared/src/reservation.schema.ts) con `superRefine` cross-field (spotMapping completo per `mode=explicit`, spotPool presente per `mode=pool`).
+- **Skip & report, non transazione atomica**: per ogni combinazione `(utente, data)` il service prova a creare; in caso di fallimento (giorno bloccato da Closure, utente già prenotato per quel giorno+tipo, posto occupato, pool esaurito) salta e accumula in `skipped[]` con motivo. Response `{created: N, skipped: [{userId, date, reason}]}`.
+- **Performance**: pre-fetch in 3-4 query (spot del mapping/pool, closure del range, prenotazioni ACTIVE esistenti) + check in-memory per ogni candidate → un solo `createMany`. Fallback a insert sequenziali con catch P2002 se `createMany` collide su race. Cap configurabile via env `BULK_RESERVATIONS_MAX_INSERTS` (default 5000) — stesso pattern di `MAX_DAYS_AHEAD`/`*_LIST_LIMIT`.
+- **`unrestrictedDate`**: l'admin può caricare nel passato (record storici) e oltre `MAX_DAYS_AHEAD`. Le Closure restano applicate (giorni bloccati → skipped).
+- **Modalità di mappatura**:
+  - `explicit` (default UI): `spotMapping` Record<userId, spotId> — l'admin sceglie il posto per ogni utente.
+  - `pool`: `spotPool` {siteId, spotType} — il sistema assegna il primo posto libero per ogni (utente, data); aggiorna lo stato in-memory così non riassegna lo stesso posto due volte nello stesso giorno.
+- [`ClosuresService.findAllInRange`](apps/api/src/closures/closures.service.ts): pre-fetch grezzo delle closure del range (match in-memory) per evitare N round-trip durante il bulk.
+
+### Frontend — wizard modale
+
+- **Integrato in `/admin/reservations`** (non pagina dedicata): bottone "Prenotazione massiva…" accanto a "Prenota per utente…" nella vista Lista. Rimossa la voce "Caricamento massivo" dal menu admin nested ([`AppShell.tsx`](apps/web/src/components/AppShell.tsx)) — restano 2 sotto-voci (Prenotazioni, Chiusure).
+- **[`BulkBookingsDialog`](apps/web/src/components/BulkBookingsDialog.tsx)**: Modal full-screen (classe `.rsv-modal-fullscreen`) con wizard a 4 step:
+  1. Utenti (FilterableMultiSelect).
+  2. Range Da/A + checkbox giorni della settimana (default lun-ven). DatePicker con X per pulire il campo; Da/A pre-popolati dai filtri della vista Lista se valorizzati. Grid responsive (`.rsv-bulk-date-grid`, `auto-fit minmax`) per non forzare scroll orizzontale su mobile.
+  3. Mappatura: radio "Mappatura esplicita 1:1" (ComboBox per utente, label `code - zone`) vs "Auto-assign" (Sede + Tipo). Cambiare i filtri di lookup azzera le selezioni (scelta UX esplicita, niente stato "fuori filtro").
+  4. Riepilogo (count "N prenotazioni verranno create") + submit + **report**: notification "Caricamento completato — X inviate di cui Y create e Z saltate" + tabella `skipped` con bottone "Copia lista" (TSV in clipboard).
+- **Lazy-mount del body** (`{open && ...}`): evita la collisione di `id`/`aria-*` form-field con gli altri Modal della pagina (era un bug bloccante che impediva il FilterableMultiSelect).
+- **Refresh di entrambi i tab** post-bulk: `bulkReloadTick` lift-up nel padre [`AdminReservationsList`](apps/web/src/components/AdminReservationsList.tsx), incluso nelle deps dei fetch dei due `AdminReservationsTab` (il bulk crea prenotazioni di tipo arbitrario, quindi deve aggiornare sia Posti auto sia Scrivanie). Niente banner di pagina persistente: il report nel modal è il feedback.
+- **API client** [`api.adminBulkCreateReservations`](apps/web/src/lib/api.ts).
+
+### Documentazione
+
+- **Matrice di autorizzazione** ([`docs/AUTHORIZATION_MATRIX.md`](docs/AUTHORIZATION_MATRIX.md), linkata da [`README.md`](README.md)): tabella completa pagine + API per ruolo (GUEST/USER/ADMIN), con legenda (✅ / ❌ redirect /403 / ↪ redirect /login / 🔒 403 / 🚪 401-at-proxy), note su ordine di valutazione middleware, ownership check (`/reservations/me`, `DELETE /reservations/:id` → 404 se non propria), e rotte pubbliche. Compilata leggendo controller + middleware + proxy.
+
 ## 2026-06-20 — Chiusure (Closure): festività, manutenzioni, blocchi di sede + menu admin nested
 
 Prima feature di amministrazione "calendariale": l'admin può bloccare giorni (festività, manutenzioni, chiusure di sede) e gli utenti non possono più prenotare per quei giorni. Pacchetto end-to-end (schema DB → API → UI) + ristrutturazione del menu admin per ospitare le 3 sotto-pagine (`/admin/reservations`, `/admin/closures`, futura `/admin/bulk-bookings`).
