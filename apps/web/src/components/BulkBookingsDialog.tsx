@@ -746,14 +746,15 @@ function Step3Mapping(props: Step3Props) {
               <div className="cds--label" style={{ marginBottom: "0.5rem" }}>
                 Mappatura utente → posto
               </div>
+              {/* Niente `overflow:auto` qui: clipperebbe il dropdown del
+                  ComboBox (renderizzato inline da Carbon) tagliando le option.
+                  Il modal è full-screen con scroll proprio, quindi la lista
+                  scrolla con esso senza bisogno di un contenitore interno. */}
               <div
                 style={{
                   display: "flex",
                   flexDirection: "column",
                   gap: "0.75rem",
-                  maxHeight: "40vh",
-                  overflowY: "auto",
-                  paddingRight: "0.25rem",
                 }}
               >
                 {selectedUsers.map((u) => {

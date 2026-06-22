@@ -38,6 +38,10 @@ export interface AdminReservation extends MyReservation {
   // nel payload — qui lo dichiariamo per type-safety, anche se è ridondante
   // con `spot.type`.
   spotType: SpotType;
+  // Audit (C5): chi ha creato / cancellato. `null` per record legacy o azioni
+  // non tracciate → la UI mostra "—".
+  createdBy: { id: string; displayName: string; email: string } | null;
+  cancelledBy: { id: string; displayName: string; email: string } | null;
 }
 
 export interface AdminReservationsResponse {
@@ -230,6 +234,14 @@ export const api = {
   adminCancelReservation: (id: string) =>
     call<{ id: string; status: "ACTIVE" | "CANCELLED" }>(`/admin/reservations/${id}`, {
       method: "DELETE",
+    }),
+  // Admin: cancellazione massiva. Solo le ACTIVE tra gli `ids` vengono
+  // cancellate; ritorna `cancelled` (count effettivo, può essere < ids.length
+  // se alcune erano già cancellate o rimosse nel frattempo).
+  adminBulkCancelReservations: (ids: string[]) =>
+    call<{ cancelled: number }>("/admin/reservations/bulk-cancel", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
     }),
   // --- Closures (giorni bloccati: festività, manutenzioni, ecc.) ---
   // Lista user-level (no admin guard): ritorna `{ date, reason }[]` per

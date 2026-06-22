@@ -44,6 +44,18 @@ export const AdminUpdateReservationSchema = z.object({
 });
 export type AdminUpdateReservationDto = z.infer<typeof AdminUpdateReservationSchema>;
 
+// Admin: cancellazione massiva. Il client manda gli `ids` selezionati nella
+// tabella (multi-select). Solo le ACTIVE vengono toccate (le già-CANCELLED
+// vengono ignorate); idempotente. POST con body invece di DELETE perché il
+// body su DELETE non è universalmente supportato (stesso pattern delle
+// chiusure bulk-delete). Response `{cancelled: N}`.
+export const AdminBulkCancelReservationsSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1, "almeno un id"),
+});
+export type AdminBulkCancelReservationsDto = z.infer<
+  typeof AdminBulkCancelReservationsSchema
+>;
+
 // Admin: caricamento massivo prenotazioni (pre-carico HR per stagisti/nuovi
 // assunti). Genera N×M inserimenti dove N=utenti, M=giorni del range che
 // matchano i weekdays. Skip & report: ogni create fallita (Closure attiva,

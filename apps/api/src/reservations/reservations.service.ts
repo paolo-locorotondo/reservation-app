@@ -71,7 +71,7 @@ export class ReservationsService {
   async create(
     userId: string,
     dto: CreateReservationDto,
-    opts: { unrestrictedDate?: boolean } = {},
+    opts: { unrestrictedDate?: boolean; actorUserId?: string } = {},
   ) {
     // `unrestrictedDate=true` usato dall'admin per inserire prenotazioni nel
     // passato (es. inserimento storico HR) o oltre `MAX_DAYS_AHEAD`. Le altre
@@ -131,6 +131,10 @@ export class ReservationsService {
           spotType: spot.type,
           date,
           status: "ACTIVE",
+          // Audit: chi ha materialmente creato. Self-service → l'utente
+          // stesso (default a `userId`); admin "per conto di" → admin.id
+          // passato via `opts.actorUserId`.
+          createdByUserId: opts.actorUserId ?? userId,
         },
         include: { spot: true },
       });
@@ -183,9 +187,31 @@ export class ReservationsService {
 
     return this.prisma.reservation.update({
       where: { id: r.id },
-      data: { status: "CANCELLED" },
+      // Audit: chi ha cancellato. `userId` è l'utente del token: l'intestatario
+      // nella cancel self-service, l'admin chiamante quando `isAdmin` (vedi
+      // AdminReservationsController che passa admin.id).
+      data: { status: "CANCELLED", cancelledByUserId: userId },
       select: { id: true, status: true },
     });
+  }
+
+  /**
+   * Admin: cancellazione massiva (status → CANCELLED). Solo le ACTIVE tra gli
+   * `ids` forniti vengono toccate — le già-CANCELLED sono ignorate dal `where`
+   * (idempotente: rilanciare non cambia nulla, niente errore). `actorUserId`
+   * è l'admin chiamante, salvato in `cancelledByUserId` per audit (C5).
+   * Ritorna il count effettivo cancellato.
+   */
+  async bulkCancel(
+    actorUserId: string,
+    ids: string[],
+  ): Promise<{ cancelled: number }> {
+    if (ids.length === 0) return { cancelled: 0 };
+    const res = await this.prisma.reservation.updateMany({
+      where: { id: { in: ids }, status: "ACTIVE" },
+      data: { status: "CANCELLED", cancelledByUserId: actorUserId },
+    });
+    return { cancelled: res.count };
   }
 
   /**
@@ -260,6 +286,7 @@ export class ReservationsService {
    */
   async bulkCreate(
     dto: AdminBulkCreateReservationsDto,
+    actorUserId: string,
   ): Promise<AdminBulkCreateReservationsResponse> {
     const from = parseDateOnly(dto.from);
     const to = parseDateOnly(dto.to);
@@ -535,6 +562,8 @@ export class ReservationsService {
             spotType: t.spotType,
             date: t.date,
             status: "ACTIVE",
+            // Audit: il bulk è sempre un'azione admin → attore = chiamante.
+            createdByUserId: actorUserId,
           })),
         });
         created = r.count;
@@ -549,6 +578,7 @@ export class ReservationsService {
                 spotType: t.spotType,
                 date: t.date,
                 status: "ACTIVE",
+                createdByUserId: actorUserId,
               },
             });
             created++;
@@ -643,6 +673,10 @@ export class ReservationsService {
           },
         },
         user: { select: { id: true, email: true, displayName: true } },
+        // Audit (C5): chi ha creato/cancellato. Nullable → null per record
+        // legacy o azioni non tracciate. La UI mostra displayName o "—".
+        createdBy: { select: { id: true, displayName: true, email: true } },
+        cancelledBy: { select: { id: true, displayName: true, email: true } },
       },
     });
   }
@@ -708,6 +742,8 @@ type AdminReservationItem = Prisma.ReservationGetPayload<{
       };
     };
     user: { select: { id: true; email: true; displayName: true } };
+    createdBy: { select: { id: true; displayName: true; email: true } };
+    cancelledBy: { select: { id: true; displayName: true; email: true } };
   };
 }>;
 

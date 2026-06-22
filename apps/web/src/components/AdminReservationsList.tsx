@@ -10,6 +10,8 @@ import {
   TableBody,
   TableCell,
   TableContainer,
+  TableSelectAll,
+  TableSelectRow,
   Button,
   IconButton,
   InlineLoading,
@@ -36,6 +38,7 @@ import {
   ArrowDown,
   Renew,
   Add,
+  TrashCan,
 } from "@carbon/icons-react";
 import { Italian } from "flatpickr/dist/l10n/it.js";
 import type { CustomLocale } from "flatpickr/dist/types/locale";
@@ -64,7 +67,9 @@ const HEADERS = [
   { key: "zone", header: "Zona" },
   { key: "status", header: "Stato" },
   { key: "createdAt", header: "Creata il" },
+  { key: "createdByName", header: "Creata da" },
   { key: "cancelledAt", header: "Cancellata il" },
+  { key: "cancelledByName", header: "Cancellata da" },
 ];
 
 const SORTABLE_KEYS = new Set([
@@ -76,7 +81,9 @@ const SORTABLE_KEYS = new Set([
   "zone",
   "status",
   "createdAt",
+  "createdByName",
   "cancelledAt",
+  "cancelledByName",
 ]);
 
 type SortState = { key: string; dir: "asc" | "desc" } | null;
@@ -280,6 +287,11 @@ function AdminReservationsTab({
   const [reloadTick, setReloadTick] = useState(0);
   const [sort, setSort] = useState<SortState>(null);
 
+  // Cancellazione massiva (C4): selezione righe ACTIVE + modal di conferma.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCancelOpen, setBulkCancelOpen] = useState(false);
+  const [bulkCancelling, setBulkCancelling] = useState(false);
+
   // Modal di gestione prenotazione (cancella + cambio intestatario):
   //  - `manageTarget` è la reservation completa (per i dettagli nel modal).
   //  - `editUserId` segna la modalità "cambio utente":
@@ -435,6 +447,9 @@ function AdminReservationsTab({
         setItems(res.items);
         setTruncated(res.truncated);
         setLimit(res.limit);
+        // Reset selezione bulk: gli id potrebbero non essere più nel dataset
+        // (cambio filtri / reload). Evita di cancellare righe non più visibili.
+        setSelectedIds(new Set());
       })
       .catch((e: ApiError) => {
         if (cancelled) return;
@@ -480,7 +495,10 @@ function AdminReservationsTab({
       zone: r.spot.zone?.name ?? "—",
       status: r.status === "ACTIVE" ? "Attiva" : "Cancellata",
       createdAt: formatDateTime(r.createdAt),
+      createdByName: r.createdBy?.displayName ?? "—",
       cancelledAt: r.status === "CANCELLED" ? formatDateTime(r.updatedAt) : "—",
+      cancelledByName:
+        r.status === "CANCELLED" ? r.cancelledBy?.displayName ?? "—" : "—",
     }));
   }, [items]);
 
@@ -495,6 +513,48 @@ function AdminReservationsTab({
       return sort.dir === "asc" ? cmp : -cmp;
     });
   }, [rows, sort]);
+
+  // Solo le ACTIVE sono selezionabili per la cancellazione massiva (le
+  // CANCELLED non hanno azione utile). Set per lookup O(1) nel render.
+  const selectableIds = useMemo(
+    () => items.filter((r) => r.status === "ACTIVE").map((r) => r.id),
+    [items],
+  );
+  const allSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+  const someSelected = selectableIds.some((id) => selectedIds.has(id));
+  function toggleAllSelection() {
+    setSelectedIds(allSelected ? new Set() : new Set(selectableIds));
+  }
+  function toggleOneSelection(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function confirmBulkCancel() {
+    if (selectedIds.size === 0) return;
+    setBulkCancelling(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const res = await api.adminBulkCancelReservations(ids);
+      setSuccessMsg(
+        `${res.cancelled} prenotazion${res.cancelled === 1 ? "e cancellata" : "i cancellate"}.`,
+      );
+      setBulkCancelOpen(false);
+      setSelectedIds(new Set());
+      setReloadTick((t) => t + 1);
+      onBulkDone(); // refresh anche l'altro tab
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "Errore imprevisto";
+      setError(`Cancellazione multipla fallita: ${msg}`);
+    } finally {
+      setBulkCancelling(false);
+    }
+  }
 
   const filtersActive =
     siteId !== "" ||
@@ -816,6 +876,19 @@ function AdminReservationsTab({
             >
               Prenotazione massiva…
             </Button>
+            {/* Cancella selezionate: visibile solo con almeno una riga ACTIVE
+                selezionata. danger--tertiary = warning visivo senza invadere
+                il layout quando non c'è selezione. */}
+            {selectedIds.size > 0 && (
+              <Button
+                kind="danger--tertiary"
+                size="sm"
+                renderIcon={TrashCan}
+                onClick={() => setBulkCancelOpen(true)}
+              >
+                {`Cancella selezionate (${selectedIds.size})`}
+              </Button>
+            )}
           </div>
         ) : (
           <span /> // placeholder per mantenere space-between con il Renew
@@ -908,6 +981,16 @@ function AdminReservationsTab({
               <Table {...getTableProps()}>
                 <TableHead>
                   <TableRow>
+                    {/* Select-all: agisce solo sulle righe ACTIVE visibili. */}
+                    <TableSelectAll
+                      id={`admin-select-all-${tabKey}`}
+                      name={`admin-select-all-${tabKey}`}
+                      ariaLabel="Seleziona tutte le prenotazioni attive"
+                      checked={allSelected}
+                      indeterminate={!allSelected && someSelected}
+                      onSelect={toggleAllSelection}
+                      disabled={selectableIds.length === 0}
+                    />
                     {headers.map((h) => {
                       const { key, ...headerProps } = getHeaderProps({ header: h });
                       const sortable = SORTABLE_KEYS.has(h.key);
@@ -962,27 +1045,50 @@ function AdminReservationsTab({
                     // utile e cursor default segnala il disabled state).
                     const reservation = items.find((r) => r.id === row.id);
                     const isActive = reservation?.status === "ACTIVE";
+                    // Click "gestisci" (apre il modal cancella/transfer):
+                    // attaccato alle SINGOLE celle dati, NON alla riga. Così
+                    // la cella checkbox (TableSelectRow, separata) non lo
+                    // eredita — cliccare la checkbox seleziona soltanto, senza
+                    // aprire il modal. `stopPropagation` su Carbon
+                    // TableSelectRow non è affidabile (non forwarda onClick),
+                    // quindi spostiamo l'azione sulle celle invece di provare
+                    // a fermarne la propagazione.
+                    const openManage =
+                      isActive && reservation
+                        ? () => {
+                            setManageTarget(reservation);
+                            setEditUserId(null);
+                          }
+                        : undefined;
                     return (
                       <TableRow
                         key={rowKey}
                         {...rowProps}
                         className={isActive ? "rsv-row-clickable" : undefined}
-                        onClick={
-                          isActive && reservation
-                            ? () => {
-                                setManageTarget(reservation);
-                                setEditUserId(null);
-                              }
-                            : undefined
-                        }
-                        title={
-                          isActive
-                            ? "Clicca per gestire la prenotazione"
-                            : undefined
-                        }
                       >
+                        {/* Checkbox di selezione: solo per le ACTIVE. Per le
+                            CANCELLED una cella vuota mantiene l'allineamento. */}
+                        {isActive ? (
+                          <TableSelectRow
+                            id={`admin-select-${row.id}`}
+                            name={`admin-select-${row.id}`}
+                            ariaLabel="Seleziona prenotazione"
+                            checked={selectedIds.has(row.id)}
+                            onSelect={() => toggleOneSelection(row.id)}
+                          />
+                        ) : (
+                          <TableCell />
+                        )}
                         {row.cells.map((cell) => (
-                          <TableCell key={cell.id}>{String(cell.value)}</TableCell>
+                          <TableCell
+                            key={cell.id}
+                            onClick={openManage}
+                            title={
+                              isActive ? "Clicca per gestire la prenotazione" : undefined
+                            }
+                          >
+                            {String(cell.value)}
+                          </TableCell>
                         ))}
                       </TableRow>
                     );
@@ -1135,6 +1241,27 @@ function AdminReservationsTab({
         initialFrom={dateFrom}
         initialTo={dateTo}
       />
+
+      {/* Modal conferma cancellazione massiva. Solo le ACTIVE selezionate
+          vengono cancellate (il backend ignora le altre). */}
+      <Modal
+        open={bulkCancelOpen}
+        danger
+        modalHeading={`Cancellare ${selectedIds.size} prenotazion${selectedIds.size === 1 ? "e" : "i"}?`}
+        primaryButtonText={bulkCancelling ? "Cancellazione…" : "Cancella"}
+        secondaryButtonText="Annulla"
+        primaryButtonDisabled={bulkCancelling}
+        onRequestClose={() => {
+          if (!bulkCancelling) setBulkCancelOpen(false);
+        }}
+        onRequestSubmit={confirmBulkCancel}
+      >
+        <p>
+          Stai per cancellare <strong>{selectedIds.size}</strong>{" "}
+          prenotazion{selectedIds.size === 1 ? "e" : "i"}. L&apos;operazione è
+          immediata e gli utenti non ricevono notifica.
+        </p>
+      </Modal>
     </div>
   );
 }

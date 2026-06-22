@@ -65,6 +65,7 @@ Tutte le route sono dietro il proxy: il browser non parla mai direttamente con N
 | `GET /admin/reservations` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` |
 | `POST /admin/reservations` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (prenota per altri) |
 | `POST /admin/reservations/bulk` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (caricamento massivo) |
+| `POST /admin/reservations/bulk-cancel` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (cancellazione massiva) |
 | `PATCH /admin/reservations/:id` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (transfer intestatario) |
 | `DELETE /admin/reservations/:id` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (cancella prenotazione altrui) |
 | `GET /admin/spots` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (bypassa vincolo temporale) |

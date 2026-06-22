@@ -2,6 +2,26 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-22 — Cancellazione massiva prenotazioni + audit createdBy/cancelledBy
+
+Due feature admin gemelle: cancellare più prenotazioni in un colpo, e tracciare chi ha creato/cancellato ogni prenotazione.
+
+### Audit attori (C5)
+
+- **Schema** ([`schema.prisma`](apps/api/prisma/schema.prisma)): `Reservation.createdByUserId` + `cancelledByUserId` (entrambi nullable, FK verso `User` con `onDelete: SetNull`), relazioni named `ReservationCreatedBy` / `ReservationCancelledBy`. Migrazione [`20260622120000_add_reservation_audit_actors`](apps/api/prisma/migrations/20260622120000_add_reservation_audit_actors/migration.sql) (2 colonne + indici + FK). **Non retroattiva**: i record pre-migration restano NULL → la UI mostra "—".
+- **Popolamento** ([`ReservationsService`](apps/api/src/reservations/reservations.service.ts)):
+  - `create(userId, dto, {actorUserId?})` → `createdByUserId = actorUserId ?? userId`. Self-service: l'utente stesso. Admin "per conto di" + bulk: `admin.id` (il controller risolve l'admin via `getByToken` e passa `actorUserId`).
+  - `cancel(userId, ...)` → `cancelledByUserId = userId` (l'utente del token: intestatario nel self-service, admin chiamante quando `isAdmin`).
+  - `bulkCreate(dto, actorUserId)` → `createdByUserId = actorUserId` su tutte le righe.
+  - `adminUpdate` (transfer): `createdByUserId` invariato (cambio intestatario, non nuova creazione).
+- **UI**: 2 colonne sortable "Creata da" / "Cancellata da" in [`/admin/reservations`](apps/web/src/components/AdminReservationsList.tsx) (displayName o "—"). Tipo [`AdminReservation`](apps/web/src/lib/api.ts) esteso con `createdBy`/`cancelledBy` nullable; `findAdminItems` li include.
+
+### Cancellazione massiva (C4)
+
+- **`POST /admin/reservations/bulk-cancel`** ([`admin-reservations.controller.ts`](apps/api/src/reservations/admin-reservations.controller.ts), `RolesGuard ADMIN`) body `{ids}` → [`ReservationsService.bulkCancel`](apps/api/src/reservations/reservations.service.ts): `updateMany` filtrato su `status: ACTIVE` → CANCELLED + `cancelledByUserId = admin.id`. Idempotente (le già-CANCELLED sono ignorate dal `where`), ritorna `{cancelled: N}`. Schema [`AdminBulkCancelReservationsSchema`](packages/shared/src/reservation.schema.ts). POST con body (non DELETE) per compatibilità.
+- **UI** ([`AdminReservationsList.tsx`](apps/web/src/components/AdminReservationsList.tsx)): `TableSelectAll` + `TableSelectRow` nella vista Lista — **solo le righe ACTIVE** sono selezionabili (le CANCELLED hanno una cella vuota al posto della checkbox). Il checkbox fa `stopPropagation` per non aprire il modal di gestione del click-riga. Bottone "Cancella selezionate (N)" `kind="danger--tertiary"` visibile solo con selezione attiva; modal di conferma plurale. La selezione si resetta al cambio filtri / reload. Refresh di entrambi i tab via `onBulkDone` (la cancellazione può toccare prenotazioni di tipo misto).
+- **API client** [`api.adminBulkCancelReservations`](apps/web/src/lib/api.ts).
+
 ## 2026-06-22 — Caricamento massivo prenotazioni (bulk) + matrice autorizzazioni
 
 Feature per il pre-carico HR: l'admin crea N×M prenotazioni (N utenti × M giorni) in una sola operazione guidata, con strategia "skip & report". Più la documentazione della matrice di autorizzazione.

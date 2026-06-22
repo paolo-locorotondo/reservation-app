@@ -43,6 +43,11 @@ model User {
   accounts     Account[]
   reservations Reservation[]
   closures     Closure[]     // Audit: chi ha creato il blocco
+  // Audit back-relations: prenotazioni create / cancellate da questo utente
+  // agendo come admin (o come sé stesso). Named relation perché ci sono già
+  // più FK verso User dalla stessa tabella Reservation.
+  reservationsCreated   Reservation[] @relation("ReservationCreatedBy")
+  reservationsCancelled Reservation[] @relation("ReservationCancelledBy")
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
@@ -127,8 +132,21 @@ model Reservation {
   // momento dell'ALTER TABLE: per i nuovi record `@updatedAt` lo sovrascrive
   // ad ogni create/update.
   updatedAt DateTime          @default(now()) @updatedAt
-  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  spot      Spot              @relation(fields: [spotId], references: [id], onDelete: Cascade)
+  // Audit (C5): chi ha creato / cancellato la prenotazione. Nullable:
+  //  - createdByUserId NULL = record legacy (pre-migration) o non tracciato.
+  //    Per i nuovi record: = userId nelle create self-service, = admin.id
+  //    nelle create "per conto di" e nel bulk.
+  //  - cancelledByUserId NULL finché ACTIVE; valorizzato alla cancellazione
+  //    (= userId per cancel self-service, = admin.id per cancel/bulk-cancel admin).
+  // onDelete: SetNull così cancellare un User non cancella a cascata le
+  // prenotazioni di cui era solo "attore" (a differenza di `user` che è
+  // l'intestatario con onDelete: Cascade).
+  createdByUserId   String?
+  cancelledByUserId String?
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  spot        Spot            @relation(fields: [spotId], references: [id], onDelete: Cascade)
+  createdBy   User?           @relation("ReservationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  cancelledBy User?           @relation("ReservationCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: SetNull)
 
   // Due partial unique index gestiti via SQL (Prisma non li modella):
   //  - `Reservation_spotId_date_active_key` (migration reservation_active_partial_unique):

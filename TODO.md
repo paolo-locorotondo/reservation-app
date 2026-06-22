@@ -237,17 +237,14 @@ State perso al chiudere il modal → confirm dialog "Hai modifiche non salvate, 
 - **Priority**: ✅ FATTO
 - **Stato**: ✅ IMPLEMENTATO (vedi CHANGELOG)
 
-##### C4 — Cancellazione massiva in `/admin/reservations` (DA FARE)
+##### C4 — Cancellazione massiva in `/admin/reservations` — ✅ implementato (vedi `CHANGELOG.md`)
 
-Pattern simmetrico al bulk-delete già fatto in `/admin/closures`. In `/admin/reservations` vista Lista:
-- Backend: nuovo `POST /admin/reservations/bulk-cancel` body `{ids: string[]}` → `prisma.reservation.updateMany({where: {id: {in}}, data: {status: "CANCELLED"}})`. Idempotente, ritorna `{cancelled: N}`. Solo righe ACTIVE vengono toccate (le già-CANCELLED restano).
-- Frontend: `TableSelectAll` + `TableSelectRow` (selezione disabilitata sulle righe CANCELLED — niente azione utile), bottone "Cancella selezionate (N)" `kind="danger--tertiary"` visibile con N>0, modal di conferma plurale. Selezione resettata al cambio filtri / reloadTick.
-- Stima: ~1 giornata.
+Pattern simmetrico al bulk-delete di `/admin/closures`. `POST /admin/reservations/bulk-cancel` body `{ids}` → `updateMany` su `status: ACTIVE` → CANCELLED + `cancelledByUserId`. UI: `TableSelectAll`/`TableSelectRow` (solo righe ACTIVE), bottone "Cancella selezionate (N)" `danger--tertiary`, modal conferma.
 
-- **Priority**: 🟢 utile per pulizia di prenotazioni errate / fine onboarding
-- **Stato**: 🔴 TODO
+- **Priority**: ✅ FATTO
+- **Stato**: ✅ IMPLEMENTATO (vedi CHANGELOG)
 
-##### C5 — Audit `createdBy` / `cancelledBy` su Reservation (DA FARE)
+##### C5 — Audit `createdBy` / `cancelledBy` su Reservation — ✅ implementato (vedi `CHANGELOG.md`)
 
 Tracciare CHI ha fatto cosa su una prenotazione (oggi non sappiamo se una prenotazione l'ha creata l'utente, un admin "per conto di", o un bulk; né chi l'ha cancellata).
 
@@ -271,7 +268,26 @@ UI: 2 colonne sortable "Creata da" / "Cancellata da" in `/admin/reservations` (d
 
 Migration: 2 colonne nullable + eventuali indici se filtreremo per autore. Niente backfill (legacy → NULL → "—").
 
-- **Priority**: 🟡 MED (compliance/tracciabilità, utile prima del go-live aziendale)
+- **Priority**: ✅ FATTO
+- **Stato**: ✅ IMPLEMENTATO (vedi CHANGELOG)
+
+##### C6 — Paginazione tabelle admin (DA FARE)
+
+Le tabelle di `/admin/reservations` (vista Lista) e `/admin/closures` rendono tutte le righe del dataset (fino al `*_LIST_LIMIT`). Con molte righe la pagina web diventa lunghissima e poco navigabile — serve paginazione.
+
+Opzioni:
+- **(a) Paginazione client-side** (più semplice): le righe sono già tutte caricate (cap a `ADMIN_RESERVATIONS_LIST_LIMIT`=500). Aggiungere `Pagination` di Carbon che fa lo slice client del dataset già in memoria (es. 25/50/100 righe per pagina). Zero modifiche backend. Limite: non scala oltre il LIST_LIMIT, ma quello è già il tetto attuale.
+- **(b) Paginazione server-side** (scala davvero): `page`/`pageSize` nella query, `skip`/`take` Prisma, response con `total`. Rimuove di fatto il `truncated`/LIST_LIMIT. Più lavoro (query + count + sync con sort/filtri che oggi sono client-side per il sort).
+
+Raccomandazione: **(a) come primo step** — risolve il problema UX immediato (pagina troppo lunga) riusando i dati già in memoria, con `Pagination` Carbon. Valutare (b) solo se il dataset reale supera regolarmente i 500.
+
+Da applicare a:
+- `/admin/reservations` vista Lista ([`AdminReservationsList.tsx`](apps/web/src/components/AdminReservationsList.tsx))
+- `/admin/closures` ([`AdminClosuresList.tsx`](apps/web/src/components/AdminClosuresList.tsx))
+
+Nota: il sort è client-side su tutto il dataset (giusto, deve precedere lo slice di pagina); la selezione multi-row (bulk-cancel/bulk-delete) deve restare coerente attraverso i cambi pagina (lo state `selectedIds` è un Set di id, quindi sopravvive al cambio pagina — verificare che "seleziona tutto" agisca sulla pagina corrente o sull'intero dataset, scelta UX da fare).
+
+- **Priority**: 🟡 MED (UX, peggiora con la crescita dei dati)
 - **Stato**: 🔴 TODO
 
 #### Azioni admin (next step concreti, su `/admin/reservations`)
@@ -282,8 +298,9 @@ Migration: 2 colonne nullable + eventuali indici se filtreremo per autore. Nient
 - ✅ **Override vincoli temporali per admin**: l'admin può prenotare per date nel passato (inserimento storico HR) e oltre `MAX_DAYS_AHEAD`. Implementato via opt `unrestrictedDate` su `SpotsService.list` e `ReservationsService.create` (vedi CHANGELOG 2026-06-20).
 - ✅ **Blocca giorno (Chiusure)** (parte di C, vedi `CHANGELOG.md` 2026-06-20).
 - ✅ **Bulk pre-carico HR** (parte di C, vedi `CHANGELOG.md`): modal wizard in `/admin/reservations`.
-- **Cancellazione massiva** (vedi sezione **C4**: bulk-cancel righe selezionate in /admin/reservations).
-- **Audit createdBy/cancelledBy** (vedi sezione **C5**).
+- ✅ **Cancellazione massiva** (parte di C, vedi `CHANGELOG.md`): bulk-cancel righe selezionate in /admin/reservations.
+- ✅ **Audit createdBy/cancelledBy** (vedi `CHANGELOG.md`): colonne "Creata da"/"Cancellata da".
+- **Paginazione tabelle admin** (vedi sezione **C6**: /admin/reservations + /admin/closures).
 - **Cancellazione retroattiva al blocco** (vedi sezione **C1.1**: aspetta canale notifiche aziendale).
 - **Sezione config** parametri DB-level (parte di C, decisione Q3 dice "non ora — env").
 - **Export** CSV / Excel — fase 2, dopo che la pagina vede uso reale.

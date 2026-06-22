@@ -18,10 +18,12 @@ import { Roles } from "../auth/roles.decorator";
 import { RolesGuard } from "../auth/roles.guard";
 import { ZodValidationPipe } from "../common/zod-validation.pipe";
 import {
+  AdminBulkCancelReservationsSchema,
   AdminBulkCreateReservationsSchema,
   AdminCreateReservationSchema,
   AdminReservationsQuerySchema,
   AdminUpdateReservationSchema,
+  type AdminBulkCancelReservationsDto,
   type AdminBulkCreateReservationsDto,
   type AdminCreateReservationDto,
   type AdminReservationsQuery,
@@ -55,14 +57,18 @@ export class AdminReservationsController {
   // `unrestrictedDate: true`: può prenotare per date nel passato (es.
   // inserimento storico HR) e oltre `MAX_DAYS_AHEAD` (pianificazione lunga).
   @Post()
-  create(
+  async create(
+    @CurrentUser() payload: JwtPayload,
     @Body(new ZodValidationPipe(AdminCreateReservationSchema))
     dto: AdminCreateReservationDto,
   ) {
+    const admin = await this.users.getByToken(payload);
     return this.reservations.create(
       dto.userId,
       { spotId: dto.spotId, date: dto.date },
-      { unrestrictedDate: true },
+      // `actorUserId` = admin chiamante per l'audit createdBy (la
+      // prenotazione è intestata a `dto.userId` ma creata dall'admin).
+      { unrestrictedDate: true, actorUserId: admin.id },
     );
   }
 
@@ -70,11 +76,26 @@ export class AdminReservationsController {
   // Skip & report: non transazionale, ogni create fallita finisce in
   // `response.skipped[]` con motivo. Vedi `ReservationsService.bulkCreate`.
   @Post("bulk")
-  bulkCreate(
+  async bulkCreate(
+    @CurrentUser() payload: JwtPayload,
     @Body(new ZodValidationPipe(AdminBulkCreateReservationsSchema))
     dto: AdminBulkCreateReservationsDto,
   ) {
-    return this.reservations.bulkCreate(dto);
+    const admin = await this.users.getByToken(payload);
+    return this.reservations.bulkCreate(dto, admin.id);
+  }
+
+  // Cancellazione massiva: cancella tutte le ACTIVE tra gli `ids` selezionati.
+  // POST con body (DELETE+body non universalmente supportato). Idempotente.
+  // `cancelledByUserId` = admin chiamante (audit C5).
+  @Post("bulk-cancel")
+  async bulkCancel(
+    @CurrentUser() payload: JwtPayload,
+    @Body(new ZodValidationPipe(AdminBulkCancelReservationsSchema))
+    dto: AdminBulkCancelReservationsDto,
+  ) {
+    const admin = await this.users.getByToken(payload);
+    return this.reservations.bulkCancel(admin.id, dto.ids);
   }
 
   // Trasferisce una prenotazione attiva a un altro utente (cambio intestatario).
