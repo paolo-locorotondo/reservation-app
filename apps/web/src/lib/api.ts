@@ -243,6 +243,55 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ids }),
     }),
+  // --- MANAGER: speculari agli admin ma scoped ai riporti diretti + sé
+  // stesso (vedi backend ManagerScopeService). Stessi tipi di payload degli
+  // admin; cambia solo il path /manager/* (RolesGuard MANAGER + scope). Per
+  // l'overlay chiusure nel calendar il manager riusa `listClosures`
+  // (user-level), non esiste /manager/closures. ---
+  listManagerReservations: (params: AdminReservationsQuery) => {
+    const qs = new URLSearchParams();
+    if (params.siteId) qs.set("siteId", params.siteId);
+    if (params.floorId) qs.set("floorId", params.floorId);
+    if (params.zoneName) qs.set("zoneName", params.zoneName);
+    if (params.type) qs.set("type", params.type);
+    if (params.status) qs.set("status", params.status);
+    if (params.from) qs.set("from", params.from);
+    if (params.to) qs.set("to", params.to);
+    for (const id of params.userIds ?? []) qs.append("userIds", id);
+    const q = qs.toString();
+    return call<AdminReservationsResponse>(`/manager/reservations${q ? `?${q}` : ""}`);
+  },
+  listManagerUsers: () => call<AdminUserItem[]>("/manager/users"),
+  listManagerSpots: (params: { type: SpotType; date: string; siteId?: string; floorId?: string }) => {
+    const qs = new URLSearchParams({ type: params.type, date: params.date });
+    if (params.siteId) qs.set("siteId", params.siteId);
+    if (params.floorId) qs.set("floorId", params.floorId);
+    return call<SpotsListResponse>(`/manager/spots?${qs.toString()}`);
+  },
+  managerCreateReservation: (dto: AdminCreateReservationDto) =>
+    call<Reservation>("/manager/reservations", {
+      method: "POST",
+      body: JSON.stringify(dto),
+    }),
+  managerBulkCreateReservations: (dto: AdminBulkCreateReservationsDto) =>
+    call<AdminBulkCreateReservationsResponse>("/manager/reservations/bulk", {
+      method: "POST",
+      body: JSON.stringify(dto),
+    }),
+  managerUpdateReservation: (id: string, userId: string) =>
+    call<Reservation>(`/manager/reservations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ userId }),
+    }),
+  managerCancelReservation: (id: string) =>
+    call<{ id: string; status: "ACTIVE" | "CANCELLED" }>(`/manager/reservations/${id}`, {
+      method: "DELETE",
+    }),
+  managerBulkCancelReservations: (ids: string[]) =>
+    call<{ cancelled: number }>("/manager/reservations/bulk-cancel", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
   // --- Closures (giorni bloccati: festività, manutenzioni, ecc.) ---
   // Lista user-level (no admin guard): ritorna `{ date, reason }[]` per
   // popolare l'overlay calendar in /my-reservations. Niente siteId nei

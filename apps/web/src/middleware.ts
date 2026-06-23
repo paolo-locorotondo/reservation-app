@@ -4,14 +4,22 @@ import { NextResponse } from "next/server";
 // Protegge tutte le rotte tranne login, NextAuth, BFF proxy (che gestisce 401
 // da solo), asset statici e l'home pubblica del bootstrap.
 //
-// Per `/admin/*` non basta la session: serve anche `role === "ADMIN"` nel
-// token JWT (popolato da `lib/auth.ts` callback `jwt` da `ADMIN_EMAILS`).
-// Se il role è diverso, redirect a `/403` (pagina dedicata) — più pulito
-// del rendering della tabella admin con banner errore in fondo.
+// Gating per ruolo (oltre alla session):
+//  - `/admin/*`   → solo `role === "ADMIN"`.
+//  - `/manager/*` → solo `role === "MANAGER"`. NON ADMIN: i controller
+//    backend /manager/* sono `@Roles(MANAGER)` (darebbero 403 a un admin),
+//    e l'admin ha comunque la vista completa su /admin/*. Tenere il gate
+//    pagina coerente col gate API evita pagine che caricano ma falliscono
+//    le chiamate.
+// Role diverso → redirect a `/403`.
 export default withAuth(
   function middleware(req) {
-    const isAdminPath = req.nextUrl.pathname.startsWith("/admin");
-    if (isAdminPath && req.nextauth.token?.role !== "ADMIN") {
+    const { pathname } = req.nextUrl;
+    const role = req.nextauth.token?.role;
+    if (pathname.startsWith("/admin") && role !== "ADMIN") {
+      return NextResponse.redirect(new URL("/403", req.url));
+    }
+    if (pathname.startsWith("/manager") && role !== "MANAGER") {
       return NextResponse.redirect(new URL("/403", req.url));
     }
   },
@@ -30,5 +38,6 @@ export const config = {
     "/desks/:path*",
     "/my-reservations/:path*",
     "/admin/:path*",
+    "/manager/:path*",
   ],
 };

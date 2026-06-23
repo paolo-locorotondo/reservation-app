@@ -2,23 +2,21 @@
 
 Backlog dei prossimi step, in ordine di priorità da discutere. Voci completate nello storico in [CHANGELOG.md](./CHANGELOG.md).
 
-## Revoca privilegi ADMIN già loggati (sicurezza)
+## Revoca privilegi già loggati (sicurezza)
 
-Oggi `token.role` è "frozen" al login: viene calcolato dal callback `jwt` di NextAuth solo quando `account && profile` sono presenti, cioè una sola volta dopo l'OAuth. Conseguenze:
+Oggi `token.role` è "frozen" al login: calcolato da `computeRole` nel callback `jwt` di NextAuth solo quando `account && profile` sono presenti (una volta, dopo l'OAuth). Le sorgenti sono `ADMIN_EMAILS`, `MANAGER_EMAILS` e il claim `ibmEdIsManager`. Conseguenze:
 
-- Se un'email viene **rimossa** da `ADMIN_EMAILS` ma l'utente è già loggato, il suo JWT in tasca rimane `role: ADMIN` per tutta la durata della session (default NextAuth: 30gg). Continua a vedere `/admin/reservations` finché non fa logout (suo!) o la session scade.
-- Sintomo opposto: se aggiungo un'email ad `ADMIN_EMAILS` mentre l'utente è già loggato, lui resta `USER` finché non fa logout+login.
+- Rimuovere un'email da `ADMIN_EMAILS`/`MANAGER_EMAILS` (o un cambio del claim) **non** declassa un utente già loggato: il JWT in tasca resta col vecchio ruolo per tutta la session (default NextAuth: 30gg), finché non fa logout o la session scade.
+- Simmetrico: aggiungere un'email non promuove finché l'utente non rifà login.
+- NB: `User.role`/`User.managerEmail` a DB sono solo una copia scritta al login — il runtime (middleware, proxy, RolesGuard) usa il **token**, non il DB. Editare il DB non ha effetto senza re-login.
 
-Possibili rimedi (da discutere quando i ruoli saranno gestiti definitivamente — vedi sezione successiva):
+**Decisione presa (2026-06-23)**:
+- **(a) Riduzione `maxAge` JWT** (es. 8-12h) → mitigazione scelta, **da applicare al go-live** (non ora: in MVP `ADMIN_EMAILS`/`MANAGER_EMAILS` cambiano di rado e non c'è dato sensibile). Economica, zero query extra; la "blast radius" di un ruolo stantio si limita alla giornata lavorativa.
+- **(b) DB come source-of-truth a runtime** (rilettura `User.role` nel `jwt` ad ogni richiesta) → **rimandata** a quando esisterà una UI admin di gestione ruoli: solo allora la query-per-request (mitigabile con throttle a timestamp) si giustifica e il DB-come-verità ha senso.
+- (c) token short-lived + refresh → scartata per ora (troppa infrastruttura).
 
-- (a) **Riduzione `maxAge` JWT**: tipo 8h, così la "blast radius" di un token revocato è limitata alla giornata lavorativa. Trade-off: utenti devono riloggarsi più spesso.
-- (b) **Forzare il refresh del token via lookup DB**: nel callback `jwt` (eseguito ad ogni richiesta, non solo al login) confrontare `token.role` con `User.role` a DB. Se diverso, aggiornare `token.role`. Costa 1 query DB per ogni hit del proxy BFF — pesante ma riallinea entro pochi secondi.
-- (c) **Token short-lived + refresh**: pattern OAuth standard. Più infrastruttura.
-
-Decisione bloccata da Q1 della sezione successiva (provenienza dei ruoli da Entra ID): se il role arriva da claim Entra, il refresh sarà tipicamente legato a quello. Fino allora, la situazione attuale è accettabile in MVP perché `ADMIN_EMAILS` cambia di rado e non c'è ancora dato sensibile da proteggere. Da rivisitare prima del go-live aziendale.
-
-- **Priority**: 🟡 MED (rilevante prima del go-live, irrilevante in MVP)
-- **Stato**: 🔴 TODO
+- **Priority**: 🟡 MED (applicare (a) al go-live; irrilevante in MVP)
+- **Stato**: ⏳ DECISO — (a) maxAge da applicare al go-live
 
 ## Pagina /admin/reservations su mobile (tabella troppo larga)
 
@@ -90,7 +88,16 @@ Tre dimensioni indipendenti che ne discendono (stato per ruolo):
 - **Prenotazione per altri**: ✅ ADMIN via `POST /admin/reservations` (vedi CHANGELOG 2026-06-20). Da estendere a MANAGER con scoping riporti.
 - **Cancellazione di altri**: ✅ ADMIN via `DELETE /admin/reservations/:id` con flag `isAdmin` nel service. Da estendere a MANAGER con scoping riporti.
 
-##### B1 — Pagine admin scoped per MANAGER (PROGETTAZIONE)
+##### B1 — Pagine scoped per MANAGER — ✅ IMPLEMENTATO (vedi `CHANGELOG.md`)
+
+**Realizzato** (scelte: pagine/componenti **duplicati** in `/manager/*`, **niente** closures per manager, scope = riporti diretti + sé):
+- Backend: endpoint `/manager/reservations` (list/create/bulk/bulk-cancel/patch/delete), `/manager/users`, `/manager/spots` — `@Roles(MANAGER)` + `ManagerScopeService` che risolve `{self} ∪ {User WHERE managerEmail = manager.email}`. Lo scope è threadato nel `ReservationsService` condiviso (param `scopeUserIds`/`allowedUserIds`), non duplicato.
+- Frontend: componenti duplicati `ManagerReservationsList` / `ManagerBookForUserDialog` / `ManagerBulkBookingsDialog` / `ManagerReservationsCalendar`; pagina `/manager/reservations`; nav "Il mio team" (solo MANAGER); middleware gate `/manager/*` = MANAGER.
+- Chiusure: overlay calendar via `GET /closures` user-level (no endpoint manager).
+
+**Restano aperti** (da valutare): gerarchia multi-livello (riporti dei riporti — oggi solo diretti); se il MANAGER debba avere `unrestrictedDate` come ora (parità admin) o vincoli temporali; uso di `ibmEdHrActive` per filtrare riporti non attivi.
+
+<details><summary>Progettazione originale (storica)</summary>
 
 **Stato infrastruttura (fatto)**: ruolo `MANAGER` esiste nell'enum e viene assegnato al login (`ibmEdIsManager==="Y"`); `User.managerEmail` popolato dai claim. Manca tutto il lato "cosa può fare un MANAGER" — oggi le pagine `/admin/*` sono ADMIN-only (middleware + `RolesGuard`), quindi un MANAGER fa login, ottiene il ruolo, ma non ha ancora pagine dedicate.
 
@@ -117,8 +124,10 @@ Tre dimensioni indipendenti che ne discendono (stato per ruolo):
 - Un MANAGER può prenotare per sé nel passato/oltre MAX_DAYS_AHEAD come ADMIN, o resta vincolato come USER? Proposta: vincolato come USER per le proprie, sblocco solo per i riporti? Da decidere.
 - `ibmEdHrActive`: filtrare i riporti non più attivi? (dipende dal significato del campo, da chiarire con HR).
 
-- **Priority**: 🟡 MED (feature MANAGER vera e propria; l'infrastruttura ruolo è pronta)
-- **Stato**: 📐 PROGETTATO — attende prioritizzazione
+</details>
+
+- **Priority**: ✅ FATTO (restano le rifiniture "aperti" sopra)
+- **Stato**: ✅ IMPLEMENTATO (vedi CHANGELOG)
 
 #### (C) Eccezioni e parametri dinamici
 

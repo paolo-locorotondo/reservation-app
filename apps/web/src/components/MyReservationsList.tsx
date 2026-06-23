@@ -74,6 +74,19 @@ function isoFromDate(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
+// Limite prenotabile lato client (allineato a MAX_DAYS_AHEAD backend). Serve
+// per il no-op del calendar sui giorni FUORI RANGE FUTURI (oltre il limite):
+// come per i passati, cliccarli e redirigere a /parking?date=... darebbe solo
+// l'errore "data oltre i N giorni". Letto da NEXT_PUBLIC_MAX_DAYS_AHEAD.
+const MAX_DAYS_AHEAD = process.env.NEXT_PUBLIC_MAX_DAYS_AHEAD
+  ? Number(process.env.NEXT_PUBLIC_MAX_DAYS_AHEAD)
+  : 30;
+function maxBookableIso(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + MAX_DAYS_AHEAD);
+  return isoFromDate(d);
+}
+
 function formatDate(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
   // YYYY-MM-DD in UTC (i Reservation hanno granularità @db.Date salvati a 00:00 UTC)
@@ -369,18 +382,30 @@ function ReservationsTab({
     setDateTo(`${y}-${mm}-${String(lastDay).padStart(2, "0")}`);
   }
 
-  // Click su giorno del calendar: se l'utente ha una prenotazione in quel
-  // giorno apre il modal di cancel; altrimenti naviga a /parking|/desks per
-  // prenotare un nuovo posto. Stesso pattern del vecchio
-  // handleCalendarDayClick spostato dal padre.
+  // Click su giorno del calendar:
+  //  - se l'utente ha una prenotazione in quel giorno → modal di cancel
+  //    (sempre, anche su giorni passati: deve poterla gestire);
+  //  - altrimenti, se il giorno è PRENOTABILE (oggi o futuro) → naviga a
+  //    /parking|/desks per crearne una nuova;
+  //  - se è un giorno PASSATO senza prenotazione propria → no-op. Il
+  //    calendar ha `unboundedNavigation` per poter *vedere* lo storico, ma
+  //    nel passato non c'è nulla da prenotare → evitiamo il redirect inutile
+  //    a /parking?date=passato (che mostrerebbe comunque oggi per via del
+  //    clamp in SpotsBrowser, confondendo l'utente).
   function handleCalendarDayClick(iso: string) {
     const own = items.find((r) => String(r.date).slice(0, 10) === iso);
     if (own) {
       setCancelTarget(own);
-    } else {
-      const path = type === "PARKING" ? "/parking" : "/desks";
-      router.push(`${path}?date=${iso}`);
+      return;
     }
+    // Fuori dal range prenotabile [oggi, oggi+MAX_DAYS_AHEAD] e senza
+    // prenotazione propria → no-op (niente redirect a /parking che darebbe
+    // errore o mostrerebbe oggi confondendo).
+    if (iso < isoFromDate(new Date()) || iso > maxBookableIso()) {
+      return;
+    }
+    const path = type === "PARKING" ? "/parking" : "/desks";
+    router.push(`${path}?date=${iso}`);
   }
 
   // Overlay "giorni-mio" + label "sede · codice" per il SpotsCalendar.
@@ -537,6 +562,10 @@ function ReservationsTab({
             showAvailability={false}
             onMonthChange={handleCalendarMonthChange}
             unboundedNavigation
+            // Celle fuori range [oggi, oggi+MAX] senza prenotazione propria
+            // → grigie + cursore divieto (non c'è nulla da prenotare lì). I
+            // giorni-miei restano cliccabili (cancel) a qualsiasi data.
+            disableOutOfRange
             // Riallinea il calendar al mese di Da/A correnti (settati l'ultima
             // volta dal calendar stesso o dall'utente in vista lista). Letto
             // solo al mount → effetto al ritorno list→calendar.

@@ -26,23 +26,25 @@ I ruoli sono definiti in:
 Il ruolo `ADMIN` è assegnato via env `ADMIN_EMAILS` nel callback `jwt` di NextAuth ([`apps/web/src/lib/auth.ts`](../apps/web/src/lib/auth.ts)).
 
 - **GUEST** — non un vero ruolo: indica un utente non autenticato (nessun JWT / nessuna sessione NextAuth)
-- **USER** — utente autenticato (Google o Entra ID) con ruolo USER
-- **ADMIN** — utente autenticato con ruolo ADMIN
+- **USER** — utente autenticato (Google o w3id) con ruolo USER
+- **MANAGER** — utente con ruolo MANAGER (claim w3id `ibmEdIsManager==="Y"`): come USER + viste scoped ai propri riporti diretti su `/manager/*`
+- **ADMIN** — utente autenticato con ruolo ADMIN (email in `ADMIN_EMAILS`)
 
 ## Pagine (Next.js)
 
-Protezione applicata da [`middleware.ts`](../apps/web/src/middleware.ts). Il matcher copre `/parking/*`, `/desks/*`, `/my-reservations/*`, `/admin/*`. Le pagine **non** nel matcher sono pubbliche (vedi sezione "Rotte pubbliche").
+Protezione applicata da [`middleware.ts`](../apps/web/src/middleware.ts). Il matcher copre `/parking/*`, `/desks/*`, `/my-reservations/*`, `/admin/*`, `/manager/*`. Le pagine **non** nel matcher sono pubbliche (vedi sezione "Rotte pubbliche").
 
-| Path | GUEST | USER | ADMIN | Note |
-|---|---|---|---|---|
-| `/` | ✅ | ✅ ↪ `/my-reservations` | ✅ ↪ `/admin/reservations` | Landing pubblica; se autenticato, redirect server-side per ruolo ([`app/page.tsx`](../apps/web/src/app/page.tsx)) |
-| `/login` | ✅ | ✅ | ✅ | Pubblica; legge `?callbackUrl` per il redirect post-login |
-| `/403` | ✅ | ✅ | ✅ | Pagina "Accesso Negato"; non nel matcher |
-| `/parking` | ↪ | ✅ | ✅ | |
-| `/desks` | ↪ | ✅ | ✅ | |
-| `/my-reservations` | ↪ | ✅ | ✅ | |
-| `/admin/reservations` | ↪ | ❌ | ✅ | |
-| `/admin/closures` | ↪ | ❌ | ✅ | |
+| Path | GUEST | USER | MANAGER | ADMIN | Note |
+|---|---|---|---|---|---|
+| `/` | ✅ | ✅ ↪ `/my-reservations` | ✅ ↪ `/my-reservations` | ✅ ↪ `/admin/reservations` | Landing pubblica; se autenticato, redirect server-side per ruolo ([`app/page.tsx`](../apps/web/src/app/page.tsx)). MANAGER atterra come USER su `/my-reservations` (il team è raggiungibile da nav "Il mio team") |
+| `/login` | ✅ | ✅ | ✅ | ✅ | Pubblica; legge `?callbackUrl` per il redirect post-login |
+| `/403` | ✅ | ✅ | ✅ | ✅ | Pagina "Accesso Negato"; non nel matcher |
+| `/parking` | ↪ | ✅ | ✅ | ✅ | |
+| `/desks` | ↪ | ✅ | ✅ | ✅ | |
+| `/my-reservations` | ↪ | ✅ | ✅ | ✅ | |
+| `/manager/reservations` | ↪ | ❌ | ✅ | ❌ | Solo MANAGER (l'admin usa `/admin/*`; gate pagina coerente col gate API `@Roles(MANAGER)`) |
+| `/admin/reservations` | ↪ | ❌ | ❌ | ✅ | |
+| `/admin/closures` | ↪ | ❌ | ❌ | ✅ | |
 
 > **Ordine di valutazione del middleware**: il callback `authorized` di `withAuth` (richiede `token` presente) gira **prima** della funzione middleware. GUEST (nessun token) → redirect a `/login` *prima* del check del ruolo. USER su `/admin/*` (token presente, ruolo ≠ ADMIN) → la funzione middleware gira e redirige a `/403`.
 
@@ -50,30 +52,38 @@ Protezione applicata da [`middleware.ts`](../apps/web/src/middleware.ts). Il mat
 
 Tutte le route sono dietro il proxy: il browser non parla mai direttamente con NestJS. Il proxy firma un JWT HS256 dalla sessione NextAuth; **senza sessione ritorna 401** (`🚪`) *prima* di inoltrare. Con sessione, l'autorizzazione fine è del backend (`JwtAuthGuard` → 401 se token invalido, `RolesGuard` → 403 se ruolo insufficiente).
 
-| Method + Path | GUEST | USER | ADMIN | Guard / Note |
-|---|---|---|---|---|
-| `GET /health` | ✅ | ✅ | ✅ | Nessun guard (health check infra). Via proxy richiede comunque sessione |
-| `GET /me` | 🚪 | ✅ | ✅ | `JwtAuthGuard` |
-| `GET /sites` | 🚪 | ✅ | ✅ | `JwtAuthGuard` |
-| `GET /sites/:id/floors` | 🚪 | ✅ | ✅ | `JwtAuthGuard` |
-| `GET /spots` | 🚪 | ✅ | ✅ | `JwtAuthGuard` |
-| `GET /spots/availability` | 🚪 | ✅ | ✅ | `JwtAuthGuard` |
-| `GET /closures` | 🚪 | ✅ | ✅ | `JwtAuthGuard` (lista user-level per overlay calendar) |
-| `GET /reservations/me` | 🚪 | ✅ **(own)** | ✅ **(own)** | `JwtAuthGuard` + ownership: solo le proprie |
-| `POST /reservations` | 🚪 | ✅ **(self)** | ✅ **(self)** | `JwtAuthGuard`; `userId` preso dal token (prenota per sé) |
-| `DELETE /reservations/:id` | 🚪 | ✅ **(own)** | ✅ **(own)** | `JwtAuthGuard` + ownership: 404 se non è propria |
-| `GET /admin/reservations` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` |
-| `POST /admin/reservations` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (prenota per altri) |
-| `POST /admin/reservations/bulk` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (caricamento massivo) |
-| `POST /admin/reservations/bulk-cancel` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (cancellazione massiva) |
-| `PATCH /admin/reservations/:id` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (transfer intestatario) |
-| `DELETE /admin/reservations/:id` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (cancella prenotazione altrui) |
-| `GET /admin/spots` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (bypassa vincolo temporale) |
-| `GET /admin/users` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (lista per MultiSelect) |
-| `GET /admin/closures` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` |
-| `POST /admin/closures` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` (bulk-create) |
-| `POST /admin/closures/bulk-delete` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` |
-| `DELETE /admin/closures/:id` | 🚪 | 🔒 | ✅ | `RolesGuard ADMIN` |
+| Method + Path | GUEST | USER | MANAGER | ADMIN | Guard / Note |
+|---|---|---|---|---|---|
+| `GET /health` | ✅ | ✅ | ✅ | ✅ | Nessun guard (health check infra). Via proxy richiede comunque sessione |
+| `GET /me` | 🚪 | ✅ | ✅ | ✅ | `JwtAuthGuard` |
+| `GET /sites` | 🚪 | ✅ | ✅ | ✅ | `JwtAuthGuard` |
+| `GET /sites/:id/floors` | 🚪 | ✅ | ✅ | ✅ | `JwtAuthGuard` |
+| `GET /spots` | 🚪 | ✅ | ✅ | ✅ | `JwtAuthGuard` |
+| `GET /spots/availability` | 🚪 | ✅ | ✅ | ✅ | `JwtAuthGuard` |
+| `GET /closures` | 🚪 | ✅ | ✅ | ✅ | `JwtAuthGuard` (lista user-level per overlay calendar) |
+| `GET /reservations/me` | 🚪 | ✅ **(own)** | ✅ **(own)** | ✅ **(own)** | `JwtAuthGuard` + ownership: solo le proprie |
+| `POST /reservations` | 🚪 | ✅ **(self)** | ✅ **(self)** | ✅ **(self)** | `JwtAuthGuard`; `userId` preso dal token (prenota per sé) |
+| `DELETE /reservations/:id` | 🚪 | ✅ **(own)** | ✅ **(own)** | ✅ **(own)** | `JwtAuthGuard` + ownership: 404 se non è propria |
+| `GET /manager/reservations` | 🚪 | 🔒 | ✅ **(scope)** | 🔒 | `RolesGuard MANAGER` + scope: solo riporti diretti + sé |
+| `POST /manager/reservations` | 🚪 | 🔒 | ✅ **(scope)** | 🔒 | `RolesGuard MANAGER`; `userId` ∈ riporti+sé, altrimenti 403 |
+| `POST /manager/reservations/bulk` | 🚪 | 🔒 | ✅ **(scope)** | 🔒 | `RolesGuard MANAGER`; tutti gli `userIds` ∈ scope (403 fail-fast) |
+| `POST /manager/reservations/bulk-cancel` | 🚪 | 🔒 | ✅ **(scope)** | 🔒 | `RolesGuard MANAGER`; cancella solo ACTIVE dei riporti+sé |
+| `PATCH /manager/reservations/:id` | 🚪 | 🔒 | ✅ **(scope)** | 🔒 | `RolesGuard MANAGER`; intestatario corrente e nuovo ∈ scope |
+| `DELETE /manager/reservations/:id` | 🚪 | 🔒 | ✅ **(scope)** | 🔒 | `RolesGuard MANAGER`; 404 se fuori scope |
+| `GET /manager/spots` | 🚪 | 🔒 | ✅ | 🔒 | `RolesGuard MANAGER` (bypassa vincolo temporale, come admin) |
+| `GET /manager/users` | 🚪 | 🔒 | ✅ **(scope)** | 🔒 | `RolesGuard MANAGER`; ritorna solo riporti diretti + sé |
+| `GET /admin/reservations` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` |
+| `POST /admin/reservations` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (prenota per altri) |
+| `POST /admin/reservations/bulk` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (caricamento massivo) |
+| `POST /admin/reservations/bulk-cancel` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (cancellazione massiva) |
+| `PATCH /admin/reservations/:id` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (transfer intestatario) |
+| `DELETE /admin/reservations/:id` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (cancella prenotazione altrui) |
+| `GET /admin/spots` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (bypassa vincolo temporale) |
+| `GET /admin/users` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (lista per MultiSelect) |
+| `GET /admin/closures` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` |
+| `POST /admin/closures` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (bulk-create) |
+| `POST /admin/closures/bulk-delete` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` |
+| `DELETE /admin/closures/:id` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` |
 
 ## Note
 

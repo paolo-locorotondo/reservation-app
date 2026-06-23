@@ -2,6 +2,35 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-23 — Pagine MANAGER scoped ai riporti (/manager/*)
+
+Implementazione della feature MANAGER (B1): un MANAGER ha viste speculari a quelle admin ma **scoped ai propri riporti diretti + sé stesso**. Scelte: pagine/componenti **duplicati** (`/manager/*`, separati da `/admin/*` per personalizzazione futura per ruolo), **niente** gestione chiusure per manager.
+
+### Scope (definizione)
+
+Riporti diretti di un manager M = `User WHERE managerEmail = M.email` (gerarchia a 1 livello). Insieme ammesso = `{M} ∪ {riporti}`. Risolto da [`ManagerScopeService.allowedUserIds`](apps/api/src/manager/manager-scope.service.ts).
+
+### Backend ([`apps/api/src/manager/`](apps/api/src/manager/))
+
+- **`ManagerModule`** con 3 controller `@Roles(MANAGER)` che riusano i service esistenti (`ReservationsService`, `SpotsService`, `UsersService` — ora esportati dai rispettivi moduli):
+  - **`/manager/reservations`** — `GET` (list scoped), `POST` (create: `userId` ∈ scope o 403), `POST /bulk` (tutti gli userIds ∈ scope, 403 fail-fast), `POST /bulk-cancel` (solo ACTIVE dei riporti), `PATCH /:id` (transfer: corrente e nuovo ∈ scope), `DELETE /:id` (404 fuori scope).
+  - **`/manager/users`** — solo riporti diretti + sé (per MultiSelect/ComboBox).
+  - **`/manager/spots`** — come `/admin/spots` (`unrestrictedDate`).
+- **Scoping nel service condiviso** (non duplicato — sarebbe un rischio sicurezza): parametri opzionali `scopeUserIds`/`allowedUserIds` su [`listAdmin`](apps/api/src/reservations/reservations.service.ts), `cancel`, `adminUpdate`, `bulkCreate`, `bulkCancel`. Lo scope è **sempre vincolante** (si interseca coi filtri scelti, non bypassabile). 404 per risorse fuori scope (no leak), 403 per azioni esplicite verso utenti fuori team.
+
+### Frontend
+
+- **Componenti duplicati** (scelta esplicita per divergenza futura per ruolo): `ManagerReservationsList`, `ManagerBookForUserDialog`, `ManagerBulkBookingsDialog`, `ManagerReservationsCalendar` — copie degli admin con le sole chiamate API ri-puntate a `/manager/*` (`api.listManager*`, `api.manager*`). Overlay chiusure nel calendar via `GET /closures` user-level (no `/manager/closures`).
+- **Pagina** [`/manager/reservations`](apps/web/src/app/(app)/manager/reservations/page.tsx).
+- **Nav** ([`AppShell.tsx`](apps/web/src/components/AppShell.tsx)): `adminOnly` generalizzato a `roles[]`; nuovo branch "Il mio team" visibile solo a MANAGER (figlio: Prenotazioni → `/manager/reservations`).
+- **Middleware** ([`middleware.ts`](apps/web/src/middleware.ts)): `/manager/*` accessibile **solo** a MANAGER (l'admin usa `/admin/*`; gate pagina coerente col gate API `@Roles(MANAGER)` per evitare pagine che caricano ma falliscono le chiamate).
+- **Matrice autorizzazioni** ([AUTHORIZATION_MATRIX.md](docs/AUTHORIZATION_MATRIX.md)): aggiunta colonna MANAGER + righe `/manager/*`.
+
+### Note
+
+- Landing post-login MANAGER invariata (`/my-reservations`, come USER); il team è raggiungibile dalla nav. Da rivedere se si vuole atterraggio diretto su `/manager/reservations`.
+- Aperti (vedi TODO B1): gerarchia multi-livello, vincoli temporali del MANAGER, uso di `ibmEdHrActive`.
+
 ## 2026-06-23 — Ruolo MANAGER + gerarchia riporti (managerEmail) da claim w3id
 
 A valle dello spike Q1: l'infrastruttura del ruolo MANAGER e della gerarchia riporti. **Solo backend/auth** — le pagine scoped per MANAGER sono progettate ma non implementate (vedi TODO "(B) Permessi" → B1); le pagine `/admin/*` restano ADMIN-only.
@@ -12,7 +41,8 @@ A valle dello spike Q1: l'infrastruttura del ruolo MANAGER e della gerarchia rip
 
 ### Assegnazione ruolo al login
 
-- **`auth.ts`** [`computeRole`](apps/web/src/lib/auth.ts): priorità **ADMIN** (email in `ADMIN_EMAILS`) > **MANAGER** (`ibmEdIsManager === "Y"`, confermato nello spike) > **USER**. `managerEmail` estratto dal claim w3id omonimo.
+- **`auth.ts`** [`computeRole`](apps/web/src/lib/auth.ts): priorità **ADMIN** (email in `ADMIN_EMAILS`) > **MANAGER** (`ibmEdIsManager === "Y"` **oppure** email in `MANAGER_EMAILS`) > **USER**. `managerEmail` estratto dal claim w3id omonimo.
+- **`MANAGER_EMAILS`** (nuova env, CSV di email): override manuale del ruolo MANAGER oltre al claim. Duplice uso: testare MANAGER in locale (il proprio account w3id ha `ibmEdIsManager="N"`) ed escape hatch a regime per chi ha il claim sbagliato, senza redeploy. Simmetrica ad `ADMIN_EMAILS`.
 - Persistenza: `managerEmail` + `role` propagati al backend via `syncRoleToBackend` (login) e via il **proxy BFF** (ogni richiesta) nel JWT firmato. [`provisionFromToken`](apps/api/src/users/users.service.ts) scrive `managerEmail` con **spread condizionale** — un token senza il claim (es. login Google) NON azzera il valore già a DB.
 - Tipi aggiornati: `Role` (3 valori) in [`next-auth.d.ts`](apps/web/src/types/next-auth.d.ts) e [`jwt.strategy.ts`](apps/api/src/auth/jwt.strategy.ts) `JwtPayload` (+ `managerEmail?`).
 

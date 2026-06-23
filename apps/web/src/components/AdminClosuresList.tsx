@@ -714,6 +714,11 @@ function AddClosureDialog({ open, sites, onClose, onSuccess }: AddClosureDialogP
   return (
     <Modal
       open={open}
+      size="lg"
+      // Full-screen: il dialog contiene un calendar inline (selezione multi-data)
+      // + filtri, serve spazio. Stessa classe del BulkBookingsDialog
+      // (vedi globals.scss `.rsv-modal-fullscreen`: 100dvh + footer pinnato).
+      className="rsv-modal-fullscreen"
       modalHeading="Aggiungi chiusura"
       primaryButtonText={submitting ? "Salvataggio…" : "Crea chiusura"}
       secondaryButtonText="Annulla"

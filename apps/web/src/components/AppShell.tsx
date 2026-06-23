@@ -31,17 +31,18 @@ import type { ComponentType, ReactNode } from "react";
 // Voce di nav. Le voci con `children` si rendono come dropdown
 // (Carbon `HeaderMenu` su desktop, `SideNavMenu` su mobile drawer); cliccare
 // la voce-padre apre il sotto-menu invece di navigare. Le voci foglia
-// navigano direttamente all'`href`. `adminOnly` nasconde l'intera voce
-// (compresi i figli) ai non-ADMIN.
+// navigano direttamente all'`href`. `roles` (se presente) limita la
+// visibilità della voce ai soli ruoli elencati; assente = visibile a tutti.
 //
 // L'`Icon` è usata solo nello shortcut della top-bar mobile (HeaderGlobalAction).
 // Per voci-padre con children, lo shortcut va al PRIMO figlio (default landing
 // per quella sezione) — comportamento idiomatico per nav a 2 livelli su mobile.
+type NavRole = "USER" | "ADMIN" | "MANAGER";
 type NavLeaf = { label: string; href: string; Icon: ComponentType };
 type NavBranch = { label: string; Icon: ComponentType; children: NavLeaf[] };
-type NavItem = (NavLeaf | NavBranch) & { adminOnly?: boolean };
+type NavItem = (NavLeaf | NavBranch) & { roles?: NavRole[] };
 
-function isBranch(item: NavItem): item is NavBranch & { adminOnly?: boolean } {
+function isBranch(item: NavItem): item is NavBranch & { roles?: NavRole[] } {
   return "children" in item;
 }
 
@@ -52,10 +53,20 @@ const NAV: NavItem[] = [
   {
     label: "Amministrazione",
     Icon: Group,
-    adminOnly: true,
+    roles: ["ADMIN"],
     children: [
       { label: "Prenotazioni", href: "/admin/reservations", Icon: Group },
       { label: "Chiusure", href: "/admin/closures", Icon: Group },
+    ],
+  },
+  {
+    // Vista MANAGER: stessa UX di "Amministrazione" ma scoped ai propri
+    // riporti (vedi /manager/*). Niente "Chiusure" (resta ADMIN-only).
+    label: "Il mio team",
+    Icon: Group,
+    roles: ["MANAGER"],
+    children: [
+      { label: "Prenotazioni", href: "/manager/reservations", Icon: Group },
     ],
   },
 ];
@@ -74,11 +85,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const email = session?.user?.email ?? "";
   // [SPIKE Q1] Claim w3id mostrati nel menu account (solo login ibmsso).
   const w3id = session?.user?.w3id;
-  // Voci nav filtrate per ruolo. Le `adminOnly` sono visibili solo se il
-  // role della session è ADMIN (vedi types/next-auth.d.ts + lib/auth.ts che
-  // popola il claim da ADMIN_EMAILS).
-  const isAdmin = session?.user?.role === "ADMIN";
-  const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
+  // Voci nav filtrate per ruolo: una voce con `roles` è visibile solo se il
+  // ruolo della session è incluso (vedi types/next-auth.d.ts + lib/auth.ts).
+  // Senza `roles` → visibile a tutti.
+  const role = session?.user?.role;
+  const visibleNav = NAV.filter(
+    (n) => !n.roles || (role !== undefined && n.roles.includes(role)),
+  );
 
   // Click-outside per chiudere il pannello utente. HeaderPanel non lo gestisce
   // nativamente: il pannello e il bottone trigger sono fratelli, quindi un

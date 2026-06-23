@@ -95,12 +95,16 @@ function isoFromDate(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
-// Accetta una stringa solo se è nel formato YYYY-MM-DD e >= oggi. Altrimenti
-// fallback su today. Evita di partire con una `date` invalida che farebbe poi
-// fallire la lista degli spots (date in the past).
+// Clampa la data iniziale (da query string `?date=`) nel range prenotabile
+// [oggi, oggi+MAX_DAYS_AHEAD]. Formato non valido o fuori range → today.
+// Difensivo: l'URL può arrivare da un deep-link o digitato a mano con una
+// data passata o oltre il limite — senza clamp, `listSpots` fallirebbe con
+// "data nel passato" / "data oltre i N giorni consentiti".
 function sanitizeInitialDate(s: string | undefined): string {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return todayIso();
-  return s < todayIso() ? todayIso() : s;
+  if (s < todayIso()) return todayIso();
+  if (s > maxIso()) return todayIso();
+  return s;
 }
 
 export function SpotsBrowser({ type, title, initialDate }: Props) {

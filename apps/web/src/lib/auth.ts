@@ -4,28 +4,45 @@ import jwt from "jsonwebtoken";
 
 type AppRole = "USER" | "ADMIN" | "MANAGER";
 
+// Parsa una env var CSV di email in un Set normalizzato (lowercase, trimmed).
+function emailSet(envVar: string | undefined): Set<string> {
+  return new Set(
+    (envVar ?? "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 function isAdmin(email: string | null | undefined): boolean {
   if (!email) return false;
-  const list = (process.env.ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  return list.includes(email.toLowerCase());
+  return emailSet(process.env.ADMIN_EMAILS).has(email.toLowerCase());
+}
+
+// Override manuale del ruolo MANAGER via env (oltre al claim w3id). Usi:
+//  - test in locale (il proprio account w3id ha `ibmEdIsManager="N"`);
+//  - escape hatch a regime: forzare MANAGER a chi ha il claim sbagliato,
+//    senza redeploy del codice.
+function isManagerByEnv(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return emailSet(process.env.MANAGER_EMAILS).has(email.toLowerCase());
 }
 
 // Calcolo del ruolo al login (priorità):
-//   1. ADMIN  — email in ADMIN_EMAILS (override esplicito, indipendente dall'IdP)
-//   2. MANAGER — claim w3id `ibmEdIsManager === "Y"` (confermato empiricamente
-//      nello spike Q1: "Y" per i manager, "N" per i riporti)
-//   3. USER   — default
-// Nota: il MANAGER non ha ancora pagine dedicate (vedi TODO "(B) Permessi"):
-// per ora il ruolo è solo persistito, le pagine /admin/* restano ADMIN-only.
+//   1. ADMIN   — email in ADMIN_EMAILS (override esplicito, indipendente dall'IdP)
+//   2. MANAGER — claim w3id `ibmEdIsManager === "Y"` (confermato nello spike Q1:
+//      "Y" per i manager, "N" per i riporti) OPPURE email in MANAGER_EMAILS
+//   3. USER    — default
+// Il role è "frozen" al login (calcolato solo qui nel branch account&&profile):
+// un cambio di ADMIN_EMAILS/MANAGER_EMAILS ha effetto solo dopo re-login. Vedi
+// TODO "Revoca privilegi già loggati" per la mitigazione (maxAge, prevista al
+// go-live).
 function computeRole(
   email: string | null | undefined,
   isManagerClaim: string | undefined,
 ): AppRole {
   if (isAdmin(email)) return "ADMIN";
-  if (isManagerClaim === "Y") return "MANAGER";
+  if (isManagerClaim === "Y" || isManagerByEnv(email)) return "MANAGER";
   return "USER";
 }
 
@@ -176,7 +193,7 @@ export const authOptions: NextAuthOptions = {
     },
     async session({ session, token }) {
       if (session.user) {
-        session.user.role = (token.role as "USER" | "ADMIN") ?? "USER";
+        session.user.role = (token.role as AppRole) ?? "USER";
         // [SPIKE Q1] Espone i claim w3id alla UI (menu account).
         session.user.w3id = token.w3id;
       }

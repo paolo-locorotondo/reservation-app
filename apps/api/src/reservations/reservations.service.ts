@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -171,7 +172,7 @@ export class ReservationsService {
   async cancel(
     userId: string,
     reservationId: string,
-    opts: { isAdmin?: boolean } = {},
+    opts: { isAdmin?: boolean; allowedUserIds?: string[] } = {},
   ) {
     const r = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
@@ -181,6 +182,12 @@ export class ReservationsService {
     if (!opts.isAdmin && r.userId !== userId) {
       // 404 anche qui (non 403): non vogliamo che un user sappia se un ID
       // esiste, sia perché non è suo, sia perché non esiste.
+      throw new NotFoundException("prenotazione non trovata");
+    }
+    // Scope MANAGER: anche se `isAdmin` bypassa l'ownership, il manager può
+    // cancellare SOLO prenotazioni dei propri riporti (+ sé stesso). 404 (non
+    // 403) per non leakare l'esistenza di reservation fuori scope.
+    if (opts.allowedUserIds && !opts.allowedUserIds.includes(r.userId)) {
       throw new NotFoundException("prenotazione non trovata");
     }
     if (r.status === "CANCELLED") return { id: r.id, status: r.status };
@@ -205,10 +212,18 @@ export class ReservationsService {
   async bulkCancel(
     actorUserId: string,
     ids: string[],
+    scopeUserIds?: string[],
   ): Promise<{ cancelled: number }> {
     if (ids.length === 0) return { cancelled: 0 };
     const res = await this.prisma.reservation.updateMany({
-      where: { id: { in: ids }, status: "ACTIVE" },
+      // Scope MANAGER: il filtro `userId IN scope` nel where fa sì che gli id
+      // fuori dai propri riporti vengano semplicemente ignorati (non
+      // cancellati), senza errore — coerente con l'idempotenza del bulk.
+      where: {
+        id: { in: ids },
+        status: "ACTIVE",
+        ...(scopeUserIds ? { userId: { in: scopeUserIds } } : {}),
+      },
       data: { status: "CANCELLED", cancelledByUserId: actorUserId },
     });
     return { cancelled: res.count };
@@ -225,12 +240,30 @@ export class ReservationsService {
    *    `Reservation_userId_date_spotType_active_key`.
    *  - 404 se il nuovo `userId` non esiste (FK Prisma → P2003).
    */
-  async adminUpdate(reservationId: string, newUserId: string) {
+  async adminUpdate(
+    reservationId: string,
+    newUserId: string,
+    opts: { allowedUserIds?: string[] } = {},
+  ) {
     const r = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
       select: { id: true, userId: true, status: true, spotType: true },
     });
     if (!r) throw new NotFoundException("prenotazione non trovata");
+    // Scope MANAGER: il transfer è permesso solo se SIA l'intestatario
+    // corrente SIA il nuovo intestatario sono nel set ammesso (riporti + sé).
+    // 404 sull'intestatario corrente fuori scope (non leak); 403 sul nuovo
+    // utente fuori scope (errore esplicito: il manager sa cosa sta facendo).
+    if (opts.allowedUserIds) {
+      if (!opts.allowedUserIds.includes(r.userId)) {
+        throw new NotFoundException("prenotazione non trovata");
+      }
+      if (!opts.allowedUserIds.includes(newUserId)) {
+        throw new ForbiddenException(
+          "puoi trasferire solo verso utenti del tuo team",
+        );
+      }
+    }
     if (r.status !== "ACTIVE") {
       throw new ConflictException("prenotazione non attiva, impossibile aggiornarla");
     }
@@ -287,11 +320,23 @@ export class ReservationsService {
   async bulkCreate(
     dto: AdminBulkCreateReservationsDto,
     actorUserId: string,
+    scopeUserIds?: string[],
   ): Promise<AdminBulkCreateReservationsResponse> {
     const from = parseDateOnly(dto.from);
     const to = parseDateOnly(dto.to);
     if (to.getTime() < from.getTime()) {
       throw new BadRequestException("'to' deve essere uguale o successiva a 'from'");
+    }
+
+    // Scope MANAGER: operazione esplicita su utenti scelti → fail-fast se uno
+    // qualsiasi è fuori dai propri riporti (403), invece di skippare silenzioso.
+    if (scopeUserIds) {
+      const outOfScope = dto.userIds.filter((id) => !scopeUserIds.includes(id));
+      if (outOfScope.length > 0) {
+        throw new ForbiddenException(
+          "alcuni utenti selezionati non fanno parte del tuo team",
+        );
+      }
     }
 
     // 1) Genera le date del range che matchano i `weekdays`. `weekdays` vuoto
@@ -612,12 +657,19 @@ export class ReservationsService {
    * supera la soglia, `truncated=true` per permettere al client di mostrare
    * un banner che inviti a restringere i filtri.
    */
-  async listAdmin(q: AdminReservationsQuery): Promise<{
+  // `scopeUserIds` (opzionale): vincolo di sicurezza SEMPRE applicato quando
+  // presente — usato dagli endpoint MANAGER per limitare il dataset ai propri
+  // riporti + sé stesso. Si interseca con il filtro `q.userIds` scelto
+  // dall'utente (lo scope non è bypassabile).
+  async listAdmin(
+    q: AdminReservationsQuery,
+    scopeUserIds?: string[],
+  ): Promise<{
     items: AdminReservationItem[];
     truncated: boolean;
     limit: number;
   }> {
-    const items = await this.findAdminItems(q);
+    const items = await this.findAdminItems(q, scopeUserIds);
     const truncated = items.length > ADMIN_LIST_LIMIT;
     return {
       items: truncated ? items.slice(0, ADMIN_LIST_LIMIT) : items,
@@ -628,7 +680,10 @@ export class ReservationsService {
 
   // Estratto per mantenere l'include dichiarato in un solo posto. Il payload
   // restituito è tipizzato via `AdminReservationItem` (sotto la classe).
-  private async findAdminItems(q: AdminReservationsQuery): Promise<AdminReservationItem[]> {
+  private async findAdminItems(
+    q: AdminReservationsQuery,
+    scopeUserIds?: string[],
+  ): Promise<AdminReservationItem[]> {
     const where: Prisma.ReservationWhereInput = {};
     if (q.status) where.status = q.status;
     if (q.type) where.spotType = q.type;
@@ -651,7 +706,17 @@ export class ReservationsService {
     }
     if (Object.keys(spotWhere).length > 0) where.spot = spotWhere;
 
-    if (q.userIds && q.userIds.length > 0) {
+    // Filtro userId: lo scope di sicurezza (MANAGER) si interseca con il
+    // filtro scelto dall'utente. Se entrambi presenti, vale solo l'overlap;
+    // se l'overlap è vuoto, `{ in: [] }` non ritorna nulla (corretto: il
+    // manager ha filtrato su utenti fuori dai suoi riporti).
+    if (scopeUserIds) {
+      const ids =
+        q.userIds && q.userIds.length > 0
+          ? q.userIds.filter((id) => scopeUserIds.includes(id))
+          : scopeUserIds;
+      where.userId = { in: ids };
+    } else if (q.userIds && q.userIds.length > 0) {
       where.userId = { in: q.userIds };
     }
 

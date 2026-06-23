@@ -9,8 +9,11 @@ export default function ForbiddenPage() {
         errore, contatta un amministratore.
       </p>
 
+      {/* Link alla root: `/` fa la dispatch server-side per ruolo
+          (ADMIN → /admin/reservations, MANAGER/USER → /my-reservations),
+          quindi atterra sempre su una pagina sensata per chi sta guardando. */}
       <p>
-        <Link href="/parking">← Torna ai posti auto</Link>
+        <Link href="/">← Torna alla home</Link>
       </p>
     </main>
   );

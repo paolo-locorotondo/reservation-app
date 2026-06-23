@@ -52,9 +52,18 @@ interface Props {
   onMonthChange?: (firstOfMonthUtc: Date) => void;
   // Default false: prev disabled se l'intero mese precedente è < oggi, next
   // disabled se il mese successivo è > oggi+MAX_DAYS_AHEAD. Quando true
-  // (usato in /my-reservations) prev/next sono sempre abilitati: la
-  // navigazione è puramente di lettura, non vincolata ai limiti di prenotazione.
+  // (usato in /my-reservations e /admin/closures) prev/next sono sempre
+  // abilitati: la navigazione è puramente di lettura/selezione, non vincolata
+  // ai limiti di prenotazione.
   unboundedNavigation?: boolean;
+  // Quando true (solo /my-reservations): le celle FUORI dal range prenotabile
+  // [oggi, oggi+MAX_DAYS_AHEAD] e SENZA prenotazione propria sono disabilitate
+  // (grigie, cursore divieto) — non c'è nulla da prenotare nel passato/troppo
+  // futuro. I giorni-miei restano cliccabili (cancel) a qualsiasi data.
+  // NB: distinto da `unboundedNavigation` perché /admin/closures usa
+  // unboundedNavigation ma DEVE poter cliccare le celle fuori range (per
+  // selezionarle come chiusure) → lì `disableOutOfRange` resta false.
+  disableOutOfRange?: boolean;
   // Mese iniziale. Letto solo al mount: serve a "ricordare" il mese tra
   // smontaggio/rimontaggio quando l'utente passa list→calendar→list. Default
   // = mese corrente. Tipicamente il padre passa il mese di `dateFrom` corrente
@@ -109,6 +118,7 @@ export function SpotsCalendar({
   showAvailability = true,
   onMonthChange,
   unboundedNavigation = false,
+  disableOutOfRange = false,
   initialMonth,
   closuresByDate,
 }: Props) {
@@ -342,7 +352,17 @@ export function SpotsCalendar({
               // arbitrarie per i blocchi). Senza questo, il calendar
               // mostrerebbe `--disabled` su tutto ciò che non rientra in
               // [oggi, oggi+MAX_DAYS_AHEAD].
-              const outOfRange = !unboundedNavigation && !inRange;
+              // Cella fuori dal range prenotabile [oggi, oggi+MAX]. Disabilitata:
+              //  - sulle pagine bounded (/parking, /desks): sempre;
+              //  - in /my-reservations (`disableOutOfRange`): solo se NON è un
+              //    giorno-mio (i miei restano cliccabili per il cancel).
+              //  - in /admin/closures (`unboundedNavigation` ma NON
+              //    `disableOutOfRange`): mai → le celle restano cliccabili per
+              //    selezionarle come date di chiusura.
+              const outOfRange = !inRange;
+              const outOfRangeBlocked =
+                (outOfRange && !unboundedNavigation) ||
+                (outOfRange && disableOutOfRange && !isMine);
               // Click su giorno bloccato:
               //   - normalmente disabilitato (l'utente non può prenotare);
               //   - MA se ho una prenotazione esistente lì (`isMine`), abilitato
@@ -351,7 +371,7 @@ export function SpotsCalendar({
               //     poter cliccare per aprire il modal di cancel.
               const closedNotMine = isClosed && !isMine;
               const disabled =
-                outOfRange || closedNotMine || (showAvailability && !info);
+                outOfRangeBlocked || closedNotMine || (showAvailability && !info);
 
               const classes = [
                 "rsv-calendar-day",

@@ -11,5 +11,7 @@ import { SpotsService } from "./spots.service";
   imports: [ClosuresModule],
   controllers: [SpotsController, AdminSpotsController],
   providers: [SpotsService],
+  // Esportato per riuso in ManagerModule (endpoint /manager/spots).
+  exports: [SpotsService],
 })
 export class SpotsModule {}

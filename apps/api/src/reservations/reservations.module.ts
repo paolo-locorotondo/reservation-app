@@ -11,5 +11,7 @@ import { ReservationsService } from "./reservations.service";
   imports: [UsersModule, ClosuresModule],
   controllers: [ReservationsController, AdminReservationsController],
   providers: [ReservationsService],
+  // Esportato per riuso in ManagerModule (endpoint /manager/* scoped riporti).
+  exports: [ReservationsService],
 })
 export class ReservationsModule {}
