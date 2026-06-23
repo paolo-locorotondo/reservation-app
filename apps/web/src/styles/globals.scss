@@ -372,6 +372,21 @@ main {
   margin-top: 0.25rem;
   word-break: break-all;
 }
+// [SPIKE Q1] Box claim w3id nel menu account — temporaneo per ispezione.
+.rsv-user-panel-w3id {
+  font-size: 0.75rem;
+  color: #c6c6c6;
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #525252;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  word-break: break-word;
+  span {
+    color: #8d8d8d;
+  }
+}
 
 // Stato del posto rappresentato dal colore della riga (al posto di una colonna
 // dedicata). Verde = disponibile e cliccabile; rosso = occupato. Manteniamo

@@ -310,16 +310,53 @@ Nota: il sort è client-side su tutto il dataset (giusto, deve precedere lo slic
 
 ### Domande ancora aperte
 
-#### Q1. Provenienza dei ruoli e dei riporti da Entra ID
+#### Q1. Provenienza dei ruoli e dei riporti — ✅ SPIKE FATTO (w3id OIDC)
 
-In produzione l'auth sarà Entra ID. Domande aperte:
-- Il ruolo `MANAGER` / `HR` arriva come **claim** di Entra (group membership / app role assignment) o lo manteniamo lato app?
-- I **diretti riporti** sono interrogabili via Microsoft Graph (`/me/directReports`)? Disponibile per tutti gli utenti del tenant o solo con permessi specifici?
-- HR vuole amministrare i ruoli da Entra (gruppi/app roles) o preferisce gestione interna all'app?
+Spike eseguito con provider **w3id OIDC** (`https://preprod.login.w3.ibm.com`, configurato in SSO Provisioner; vedi `lib/auth.ts` provider `ibmsso`). NB: l'auth IBM è **w3id**, non Entra diretto come ipotizzato inizialmente — le risposte sotto si basano sui claim reali osservati.
 
-**Proposta operativa**: prima di aggiungere `User.managerId`, tabella `Team` o gruppi ad hoc, fare una **spike di 1-2 giorni** con un account Entra di test (anche personale) per verificare empiricamente cosa è interrogabile e cosa no. Output dello spike: documento di 2-3 pagine con payload claim, risposte Graph, vincoli scoperti.
+##### Claim disponibili (osservati nel id_token + userinfo)
 
-Senza spike si rischia di costruire un modello dati che poi scopriamo essere ridondante o non sincronizzabile con Entra.
+Mapping attributi configurati in SSO Provisioner (sorgente → target):
+- `email → sub` / `email → emailAddress`
+- `employee_id → uid`
+- `encodedName → cn`, `encodedConsolidatedFirstName → firstName`, `encodedConsolidatedLastName → lastName`
+- `ibmEdDN → dn`
+- `encodedGroupWithoutDN → blueGroups` (BlueGroups, **valori encoded/criptici** — non nomi leggibili)
+- `w3idRealmName → realmName`
 
-- **Priority**: 🟡 MED (non urgente fino al go-live aziendale, ma blocca le feature MANAGER e qualunque cosa dipenda dai riporti)
-- **Stato**: ⏳ IN ATTESA DI SPIKE
+Campi aggiuntivi abilitati durante lo spike (tutti nei claim):
+- `ibmEdEmployeeType` (es. `"P"` = Practitioner)
+- `ibmEdHrActive` (es. `"A"`)
+- `ibmEdIsManager` (`"Y"`/`"N"`)
+- **`managerEmail`** (email del manager — chiave per ricostruire la gerarchia)
+- `ibmEdJobResponsibilities` (es. "Senior Practitioner - Application Developer: ...")
+
+##### Risposte alle domande
+
+1. **Il ruolo arriva come claim?** → SÌ, due possibili sorgenti:
+   - `blueGroups` (BlueGroups encoded): approccio IBM-nativo, ma i valori sono codici criptici da mappare per prova (creare un gruppo dedicato, vedere quale codice compare).
+   - `ibmEdIsManager` / `ibmEdEmployeeType`: discriminanti diretti già leggibili.
+2. **Riporti diretti interrogabili?** → NON direttamente via OIDC (niente claim `directReports`). MA c'è **`managerEmail`**: si può ricostruire l'albero "dal basso" — ogni utente conosce il proprio manager, quindi i riporti di X = tutti gli utenti con `managerEmail = X.email`. Richiede che gli utenti abbiano fatto login almeno una volta (per popolare il campo a DB).
+3. **HR amministra i ruoli da w3id?** → i BlueGroups sono gestibili da HR/owner senza redeploy; `ibmEd*` sono read-only dal sistema HR IBM.
+
+##### Decisioni di design (DA CONFERMARE dopo verifica con manager + HR)
+
+Per la verifica: i claim sono ora **mostrati temporaneamente nel menu account** (`AppShell`, marcati `[SPIKE Q1]`) — far loggare manager/HR e confrontare i valori (`ibmEdIsManager=Y`? cosa contiene `managerEmail` di un HR? `ibmEdEmployeeType` diverso?).
+
+- **Ruolo USER/ADMIN/MANAGER**: candidati in ordine di preferenza:
+  - (a) `ibmEdIsManager=Y` → MANAGER (semplice, leggibile). Da confermare che per il manager torni davvero `Y`.
+  - (b) `ibmEdEmployeeType` per distinguere categorie (Practitioner/Manager/...). Da capire i valori possibili.
+  - (c) BlueGroup dedicato per ADMIN (es. `reservation-app-admins`) → ADMIN. Più controllabile da HR ma richiede mappare il codice encoded.
+  - Probabile combinazione: ADMIN via BlueGroup, MANAGER via `ibmEdIsManager`, resto USER.
+- **Gerarchia riporti**: aggiungere **`User.managerEmail`** (popolato al login dai claim). I riporti di un manager = query `User WHERE managerEmail = :email`. Niente Microsoft Graph / BluePages necessari per il caso base.
+
+##### Prossimi step (post-conferma)
+
+1. Verifica claim con manager + HR (login + screenshot menu account).
+2. Aggiungere `User.managerEmail` (migration) + popolamento in `syncRoleToBackend`/provisioning al login.
+3. Sostituire `ADMIN_EMAILS` con regola basata su claim (decisa al punto sopra).
+4. Estendere `Role` enum con `MANAGER` + scoping riporti (vedi sezione "(B) Permessi per ruolo").
+5. **Rimuovere il debug temporaneo**: `console.log [SPIKE-Q1]` in `lib/auth.ts` + box claim nel menu account (`AppShell`) + eventualmente i campi `w3id` in session se non più necessari alla UI.
+
+- **Priority**: 🟡 MED (blocca feature MANAGER; il role ADMIN attuale via `ADMIN_EMAILS` regge l'MVP)
+- **Stato**: ✅ SPIKE FATTO — ⏳ decisioni da confermare con manager/HR

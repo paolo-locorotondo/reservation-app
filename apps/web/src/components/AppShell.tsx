@@ -72,6 +72,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const displayName = session?.user?.name ?? "";
   const email = session?.user?.email ?? "";
+  // [SPIKE Q1] Claim w3id mostrati nel menu account (solo login ibmsso).
+  const w3id = session?.user?.w3id;
   // Voci nav filtrate per ruolo. Le `adminOnly` sono visibili solo se il
   // role della session è ADMIN (vedi types/next-auth.d.ts + lib/auth.ts che
   // popola il claim da ADMIN_EMAILS).
@@ -282,6 +284,48 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <div className="rsv-user-panel-name">{displayName || email || "Utente"}</div>
                   {email && email !== displayName && (
                     <div className="rsv-user-panel-email">{email}</div>
+                  )}
+                  {/* [SPIKE Q1] Claim w3id per ispezione (verifica con
+                      manager/HR). Visibili solo per login ibmsso. Da rimuovere
+                      quando il modello ruoli sarà deciso (vedi TODO Q1). */}
+                  {w3id && (
+                    <div className="rsv-user-panel-w3id">
+                      {w3id.jobResponsibilities && (
+                        <div>
+                          <span>JobRole:</span> {w3id.jobResponsibilities}
+                        </div>
+                      )}
+                      {w3id.employeeType && (
+                        <div>
+                          <span>Tipo dipendente:</span> {w3id.employeeType}
+                        </div>
+                      )}
+                      {w3id.isManager && (
+                        <div>
+                          <span>È manager:</span> {w3id.isManager}
+                        </div>
+                      )}
+                      {w3id.managerEmail  && (
+                        <div>
+                          <span>Manager Email:</span> {w3id.managerEmail}
+                        </div>
+                      )}
+                      {w3id.managerFirstName  && (
+                        <div>
+                          <span>Manager FirstName:</span> {w3id.managerFirstName}
+                        </div>
+                      )}
+                      {w3id.managerLastName  && (
+                        <div>
+                          <span>Manager LastName:</span> {w3id.managerLastName}
+                        </div>
+                      )}
+                      {w3id.hrActive && (
+                        <div>
+                          <span>HR active:</span> {w3id.hrActive}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </li>
                 <SwitcherDivider />

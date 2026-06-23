@@ -2,6 +2,34 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-23 — Spike Q1: SSO IBM w3id (OIDC) + ispezione claim per modello ruoli
+
+Spike per rispondere a Q1 (provenienza ruoli/riporti). Aggiunto un secondo provider di autenticazione (**w3id OIDC IBM**) accanto a Google, e strumentazione temporanea per ispezionare i claim restituiti. Conclusioni e decisioni in [TODO.md](./TODO.md) sezione Q1.
+
+### Provider w3id
+
+- **`lib/auth.ts`**: nuovo provider `ibmsso` (NextAuth custom OAuth con discovery OIDC). Punti chiave appresi:
+  - `type: 'oauth'` (NextAuth v4 non tipizza `'oidc'`) + **`wellKnown`** (il campo che attiva la discovery: senza, solo `issuer`, NextAuth non scopre gli endpoint → errore "authorization_endpoint must be configured") + `idToken: true`.
+  - `authorization.params.scope = 'openid profile email'`.
+  - Redirect URI: `{NEXTAUTH_URL}/api/auth/callback/ibmsso` — deve combaciare **esattamente** con quello registrato in SSO Provisioner (l'id del provider determina il path; un mismatch dà "Redirect URI is invalid").
+  - Env: `AUTH_IBMSSO_ID`, `AUTH_IBMSSO_SECRET`.
+- **Login page** ([`login/page.tsx`](apps/web/src/app/login/page.tsx)): secondo bottone "Accedi con ibmsso" accanto a Google (Google resta come fallback durante lo spike).
+
+### Claim osservati (mapping SSO Provisioner)
+
+`uid` (employee_id), `dn`, `cn`/`firstName`/`lastName`, `emailAddress`, `blueGroups` (BlueGroups, **valori encoded** non leggibili), `realmName`. Campi org aggiunti: `ibmEdEmployeeType`, `ibmEdHrActive`, `ibmEdIsManager`, **`managerEmail`** (chiave gerarchia), `ibmEdJobResponsibilities`.
+
+### Strumentazione temporanea (DA RIMUOVERE — marcata `[SPIKE Q1]`)
+
+- **`lib/auth.ts`**: `console.log` dei claim (`profile`) e dei token (`account`) nel callback; cattura dei claim w3id in `token.w3id` → esposti in `session.user.w3id`.
+- **Tipi** ([`next-auth.d.ts`](apps/web/src/types/next-auth.d.ts)): interfaccia `W3idClaims` su `Session.user.w3id` e `JWT.w3id` (tutti opzionali — assenti per login Google).
+- **Menu account** ([`AppShell.tsx`](apps/web/src/components/AppShell.tsx), [`globals.scss`](apps/web/src/styles/globals.scss)): box sotto l'email che mostra ruolo/tipo dipendente/è-manager/manager/HR-active, per confronto empirico facendo loggare manager e HR.
+
+### Esito Q1 (sintesi — dettaglio in TODO)
+
+- **Ruoli**: disponibili via claim (`blueGroups` encoded, oppure `ibmEdIsManager`/`ibmEdEmployeeType` leggibili). Decisione finale da confermare con manager/HR.
+- **Riporti diretti**: NON via OIDC, ma ricostruibili "dal basso" via `managerEmail` (riporti di X = utenti con `managerEmail = X.email`). Pianificato `User.managerEmail`. Niente Microsoft Graph/BluePages per il caso base.
+
 ## 2026-06-22 — Cancellazione massiva prenotazioni + audit createdBy/cancelledBy
 
 Due feature admin gemelle: cancellare più prenotazioni in un colpo, e tracciare chi ha creato/cancellato ogni prenotazione.
@@ -19,7 +47,7 @@ Due feature admin gemelle: cancellare più prenotazioni in un colpo, e tracciare
 ### Cancellazione massiva (C4)
 
 - **`POST /admin/reservations/bulk-cancel`** ([`admin-reservations.controller.ts`](apps/api/src/reservations/admin-reservations.controller.ts), `RolesGuard ADMIN`) body `{ids}` → [`ReservationsService.bulkCancel`](apps/api/src/reservations/reservations.service.ts): `updateMany` filtrato su `status: ACTIVE` → CANCELLED + `cancelledByUserId = admin.id`. Idempotente (le già-CANCELLED sono ignorate dal `where`), ritorna `{cancelled: N}`. Schema [`AdminBulkCancelReservationsSchema`](packages/shared/src/reservation.schema.ts). POST con body (non DELETE) per compatibilità.
-- **UI** ([`AdminReservationsList.tsx`](apps/web/src/components/AdminReservationsList.tsx)): `TableSelectAll` + `TableSelectRow` nella vista Lista — **solo le righe ACTIVE** sono selezionabili (le CANCELLED hanno una cella vuota al posto della checkbox). Il checkbox fa `stopPropagation` per non aprire il modal di gestione del click-riga. Bottone "Cancella selezionate (N)" `kind="danger--tertiary"` visibile solo con selezione attiva; modal di conferma plurale. La selezione si resetta al cambio filtri / reload. Refresh di entrambi i tab via `onBulkDone` (la cancellazione può toccare prenotazioni di tipo misto).
+- **UI** ([`AdminReservationsList.tsx`](apps/web/src/components/AdminReservationsList.tsx)): `TableSelectAll` + `TableSelectRow` nella vista Lista — **solo le righe ACTIVE** sono selezionabili (le CANCELLED hanno una cella vuota al posto della checkbox). Il click "gestisci" (apertura modal cancella/transfer) è attaccato alle singole celle dati, NON alla riga, così cliccare la checkbox seleziona soltanto senza aprire il modal (Carbon `TableSelectRow` non forwarda `onClick`, quindi `stopPropagation` sul checkbox non era affidabile). Bottone "Cancella selezionate (N)" `kind="danger--tertiary"` visibile solo con selezione attiva; modal di conferma plurale. La selezione si resetta al cambio filtri / reload. Refresh di entrambi i tab via `onBulkDone` (la cancellazione può toccare prenotazioni di tipo misto).
 - **API client** [`api.adminBulkCancelReservations`](apps/web/src/lib/api.ts).
 
 ## 2026-06-22 — Caricamento massivo prenotazioni (bulk) + matrice autorizzazioni
