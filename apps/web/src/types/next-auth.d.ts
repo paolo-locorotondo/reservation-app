@@ -1,7 +1,7 @@
 import "next-auth";
 import "next-auth/jwt";
 
-type Role = "USER" | "ADMIN";
+type Role = "USER" | "ADMIN" | "MANAGER";
 
 // [SPIKE Q1] Claim w3id rilevanti per ruoli/gerarchia, esposti nel menu
 // account per ispezione (verifica empirica con manager/HR). Tutti opzionali:
@@ -34,6 +34,9 @@ declare module "next-auth/jwt" {
     provider?: string;
     providerSub?: string;
     role?: Role;
+    // Email del manager diretto (claim w3id), tenuta nel token per
+    // persistenza a DB (provisioning) e forward via proxy BFF.
+    managerEmail?: string;
     w3id?: W3idClaims;
   }
 }

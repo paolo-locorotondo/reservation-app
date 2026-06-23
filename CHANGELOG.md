@@ -2,6 +2,26 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-23 — Ruolo MANAGER + gerarchia riporti (managerEmail) da claim w3id
+
+A valle dello spike Q1: l'infrastruttura del ruolo MANAGER e della gerarchia riporti. **Solo backend/auth** — le pagine scoped per MANAGER sono progettate ma non implementate (vedi TODO "(B) Permessi" → B1); le pagine `/admin/*` restano ADMIN-only.
+
+### Schema
+
+- **Enum `Role` += `MANAGER`** + **`User.managerEmail` (nullable, indicizzato)** ([`schema.prisma`](apps/api/prisma/schema.prisma)). Migrazione [`20260623100000_add_manager_role_and_manager_email`](apps/api/prisma/migrations/20260623100000_add_manager_role_and_manager_email/migration.sql). `managerEmail` permette di ricostruire la gerarchia "dal basso": i riporti diretti di un manager M = `User WHERE managerEmail = M.email`.
+
+### Assegnazione ruolo al login
+
+- **`auth.ts`** [`computeRole`](apps/web/src/lib/auth.ts): priorità **ADMIN** (email in `ADMIN_EMAILS`) > **MANAGER** (`ibmEdIsManager === "Y"`, confermato nello spike) > **USER**. `managerEmail` estratto dal claim w3id omonimo.
+- Persistenza: `managerEmail` + `role` propagati al backend via `syncRoleToBackend` (login) e via il **proxy BFF** (ogni richiesta) nel JWT firmato. [`provisionFromToken`](apps/api/src/users/users.service.ts) scrive `managerEmail` con **spread condizionale** — un token senza il claim (es. login Google) NON azzera il valore già a DB.
+- Tipi aggiornati: `Role` (3 valori) in [`next-auth.d.ts`](apps/web/src/types/next-auth.d.ts) e [`jwt.strategy.ts`](apps/api/src/auth/jwt.strategy.ts) `JwtPayload` (+ `managerEmail?`).
+
+### Note
+
+- **Effetto pratico oggi**: un manager fa login e ottiene `role: MANAGER` + `managerEmail` a DB, ma le pagine `/admin/*` restano riservate ad ADMIN (middleware + `RolesGuard` invariati). Il ruolo è "pronto" per quando si implementeranno le pagine scoped (TODO B1).
+- **`ADMIN_EMAILS` invariato**: resta il meccanismo per ADMIN (decisione confermata — niente BlueGroups per ora).
+- Rimossi i `console.log [SPIKE-Q1]` di debug in `auth.ts`. Il box claim w3id nel menu account **resta** (utile per ispezione manager/HR), idem i campi `w3id` in session/token.
+
 ## 2026-06-23 — Spike Q1: SSO IBM w3id (OIDC) + ispezione claim per modello ruoli
 
 Spike per rispondere a Q1 (provenienza ruoli/riporti). Aggiunto un secondo provider di autenticazione (**w3id OIDC IBM**) accanto a Google, e strumentazione temporanea per ispezionare i claim restituiti. Conclusioni e decisioni in [TODO.md](./TODO.md) sezione Q1.

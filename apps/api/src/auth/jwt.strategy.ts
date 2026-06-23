@@ -5,10 +5,13 @@ import { ExtractJwt, Strategy } from "passport-jwt";
 
 export interface JwtPayload {
   sub: string;          // providerSub (id stabile dell'utente sul provider)
-  provider: string;     // "google" | "entra" | …
+  provider: string;     // "google" | "ibmsso" | …
   email: string;
   name?: string;
-  role: "USER" | "ADMIN";
+  role: "USER" | "ADMIN" | "MANAGER";
+  // Email del manager diretto (claim w3id `managerEmail`). Presente solo per
+  // login w3id; persistito su User.managerEmail al provisioning.
+  managerEmail?: string;
 }
 
 @Injectable()

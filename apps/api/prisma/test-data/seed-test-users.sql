@@ -23,14 +23,20 @@ DELETE FROM "Account"     WHERE "userId" LIKE 'test-user-%';
 DELETE FROM "User"        WHERE id LIKE 'test-user-%';
 
 -- 2) Insert massivo: 600 righe da una sola query.
-INSERT INTO "User" (id, email, "displayName", role, "updatedAt")
+INSERT INTO "User" (id, email, "displayName", role, "updatedAt", "managerEmail")
 SELECT
   'test-user-'  || lpad(i::text, 3, '0'),
   'user.'       || lpad(i::text, 3, '0') || '@example.com',
   'Utente '     || lpad(i::text, 3, '0'),
   'USER',
-  NOW()
+  NOW(),
+  NULL
 FROM generate_series(1, 600) AS i;
+
+--UPDATE "User" 
+--SET "managerEmail" = "user.001@example.com" 
+--WHERE "email" IN (SELECT "user.010@example.com", "user.011@example.com" FROM "User")
+--;
 
 COMMIT;
 

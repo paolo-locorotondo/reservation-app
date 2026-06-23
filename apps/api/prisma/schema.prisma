@@ -23,6 +23,8 @@ datasource db {
 enum Role {
   USER
   ADMIN
+  // MANAGER: derivato dal claim w3id `ibmEdIsManager === "Y"` al login
+  MANAGER
 }
 
 enum SpotType {
@@ -40,6 +42,11 @@ model User {
   email        String        @unique
   displayName  String
   role         Role          @default(USER)
+  // Email del manager diretto, dal claim w3id `managerEmail` al login. Chiave
+  // per ricostruire la gerarchia "dal basso": i riporti diretti di un manager
+  // sono gli User con `managerEmail` = email del manager. Nullable: assente
+  // per login non-w3id (Google) o per utenti senza manager (apici org).
+  managerEmail String?
   accounts     Account[]
   reservations Reservation[]
   closures     Closure[]     // Audit: chi ha creato il blocco
@@ -50,6 +57,8 @@ model User {
   reservationsCancelled Reservation[] @relation("ReservationCancelledBy")
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+
+  @@index([managerEmail])
 }
 
 // Identità federata: collega un utente a uno o più provider IdP (Google, Entra, …).

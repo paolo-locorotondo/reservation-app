@@ -82,13 +82,43 @@ Mappatura target a tre livelli:
 | Ruolo | Vede | Può prenotare per | Può cancellare per |
 |---|---|---|---|
 | `USER` (oggi default) | Sé | Sé | Sé |
-| `MANAGER` (nuovo, bloccato da Q1) | Sé + i propri riporti | Sé + i propri riporti | Sé + i propri riporti |
+| `MANAGER` (ruolo assegnato al login, pagine da fare — vedi B1) | Sé + i propri riporti | Sé + i propri riporti | Sé + i propri riporti |
 | `ADMIN` / `HR` (oggi promosso da ADMIN_EMAILS) | Tutti | Tutti | Tutti |
 
 Tre dimensioni indipendenti che ne discendono (stato per ruolo):
 - **Visibilità**: ✅ ADMIN su `/admin/reservations`. Da estendere a MANAGER con scoping riporti.
 - **Prenotazione per altri**: ✅ ADMIN via `POST /admin/reservations` (vedi CHANGELOG 2026-06-20). Da estendere a MANAGER con scoping riporti.
 - **Cancellazione di altri**: ✅ ADMIN via `DELETE /admin/reservations/:id` con flag `isAdmin` nel service. Da estendere a MANAGER con scoping riporti.
+
+##### B1 — Pagine admin scoped per MANAGER (PROGETTAZIONE)
+
+**Stato infrastruttura (fatto)**: ruolo `MANAGER` esiste nell'enum e viene assegnato al login (`ibmEdIsManager==="Y"`); `User.managerEmail` popolato dai claim. Manca tutto il lato "cosa può fare un MANAGER" — oggi le pagine `/admin/*` sono ADMIN-only (middleware + `RolesGuard`), quindi un MANAGER fa login, ottiene il ruolo, ma non ha ancora pagine dedicate.
+
+**Modello di scoping**: i riporti diretti di un manager M = `User WHERE managerEmail = M.email`. Un MANAGER può vedere/gestire le prenotazioni **proprie + dei suoi riporti diretti** (per ora solo diretti; gerarchia multi-livello = fase successiva).
+
+**Proposta UI — riuso di `/admin/reservations`, NON una pagina nuova**:
+- Stessa pagina e componenti (`AdminReservationsList`, calendar, bulk, prenota/cancella per utente), ma il backend **filtra automaticamente** il dataset agli id dei riporti + sé stesso quando il chiamante è MANAGER (non ADMIN).
+- Il filtro "Utenti" del MANAGER è precaricato/limitato ai soli riporti (non tutti gli utenti come per ADMIN).
+- Nessuna voce di menu nuova: "Amministrazione" diventa visibile anche ai MANAGER (oggi `adminOnly` la mostra solo ad ADMIN → diventerà `minRole` o simile). Label eventualmente diversa ("Il mio team" per MANAGER vs "Amministrazione" per ADMIN).
+
+**Backend — scoping (punto critico)**: la scelta architetturale è *dove* applicare il filtro riporti.
+- Opzione (a) — **stesso endpoint, scoping nel service**: `listAdmin`/`create`/`cancel`/`bulk` ricevono il chiamante (già disponibile via token) e, se `role===MANAGER`, restringono a `managerEmail = caller.email`. Pro: un solo set di endpoint. Contro: ogni endpoint admin deve ricordarsi il check (rischio dimenticanza → leak).
+- Opzione (b) — **endpoint separati `/manager/*`**: nuovi controller con un `ManagerScopeGuard` che inietta il set di userId ammessi. Pro: separazione netta, il guard centralizza il check. Contro: duplicazione endpoint.
+- Raccomandazione: **(a) con un helper condiviso** `assertCanActOn(caller, targetUserId)` + un `scopeFilter(caller)` che ritorna il `where` sugli userId — usato da tutti gli endpoint admin. Il `RolesGuard` passa da `@Roles(ADMIN)` a `@Roles(ADMIN, MANAGER)` sugli endpoint condivisi, e lo scoping fine è nel service.
+
+**Regole di permesso MANAGER** (da far rispettare nel service):
+- Vede prenotazioni dove `reservation.userId ∈ {self} ∪ {riporti}`.
+- Prenota/cancella/trasferisce solo per utenti in quell'insieme (il transfer verso un non-riporto è vietato).
+- Bulk: `userIds` ristretto ai riporti.
+- Le Chiusure (`/admin/closures`) restano ADMIN-only (decisione di sede, non di team) — da confermare.
+
+**Aperte / da decidere**:
+- Gerarchia multi-livello (riporti dei riporti)? Per ora **no**, solo diretti.
+- Un MANAGER può prenotare per sé nel passato/oltre MAX_DAYS_AHEAD come ADMIN, o resta vincolato come USER? Proposta: vincolato come USER per le proprie, sblocco solo per i riporti? Da decidere.
+- `ibmEdHrActive`: filtrare i riporti non più attivi? (dipende dal significato del campo, da chiarire con HR).
+
+- **Priority**: 🟡 MED (feature MANAGER vera e propria; l'infrastruttura ruolo è pronta)
+- **Stato**: 📐 PROGETTATO — attende prioritizzazione
 
 #### (C) Eccezioni e parametri dinamici
 
@@ -341,22 +371,26 @@ Campi aggiuntivi abilitati durante lo spike (tutti nei claim):
 
 ##### Decisioni di design (DA CONFERMARE dopo verifica con manager + HR)
 
-Per la verifica: i claim sono ora **mostrati temporaneamente nel menu account** (`AppShell`, marcati `[SPIKE Q1]`) — far loggare manager/HR e confrontare i valori (`ibmEdIsManager=Y`? cosa contiene `managerEmail` di un HR? `ibmEdEmployeeType` diverso?).
+Per la verifica: i claim sono ora **mostrati temporaneamente nel menu account** (`AppShell`, marcati `[SPIKE Q1]`) — far loggare manager/HR e confrontare i valori.
 
-- **Ruolo USER/ADMIN/MANAGER**: candidati in ordine di preferenza:
-  - (a) `ibmEdIsManager=Y` → MANAGER (semplice, leggibile). Da confermare che per il manager torni davvero `Y`.
-  - (b) `ibmEdEmployeeType` per distinguere categorie (Practitioner/Manager/...). Da capire i valori possibili.
-  - (c) BlueGroup dedicato per ADMIN (es. `reservation-app-admins`) → ADMIN. Più controllabile da HR ma richiede mappare il codice encoded.
-  - Probabile combinazione: ADMIN via BlueGroup, MANAGER via `ibmEdIsManager`, resto USER.
-- **Gerarchia riporti**: aggiungere **`User.managerEmail`** (popolato al login dai claim). I riporti di un manager = query `User WHERE managerEmail = :email`. Niente Microsoft Graph / BluePages necessari per il caso base.
+**✅ Verifica manager (2026-06-23)**: confermato che `ibmEdIsManager` discrimina correttamente — `"Y"` per il manager, `"N"` per il suo riporto diretto. Quindi `ibmEdIsManager` è una sorgente affidabile per il ruolo MANAGER.
 
-##### Prossimi step (post-conferma)
+- **Modello ruoli — DECISO e IMPLEMENTATO** (vedi `CHANGELOG.md` 2026-06-23):
+  - **ADMIN** → email in `ADMIN_EMAILS` (deciso: si **mantiene** questo meccanismo, niente BlueGroup).
+  - **MANAGER** → `ibmEdIsManager === "Y"` (confermato empiricamente).
+  - **USER** → default.
+  - Scartati: `ibmEdEmployeeType` (non necessario) e BlueGroup per ADMIN (encoded, più complesso del beneficio).
+- **Gerarchia riporti — IMPLEMENTATO**: `User.managerEmail` popolato al login dai claim. Riporti diretti di un manager = `User WHERE managerEmail = :email`. Niente Microsoft Graph / BluePages.
+- **Ancora da verificare con HR** (unico punto aperto): significato di `ibmEdHrActive` (`"A"`=?) e se serve per filtrare utenti non più attivi.
 
-1. Verifica claim con manager + HR (login + screenshot menu account).
-2. Aggiungere `User.managerEmail` (migration) + popolamento in `syncRoleToBackend`/provisioning al login.
-3. Sostituire `ADMIN_EMAILS` con regola basata su claim (decisa al punto sopra).
-4. Estendere `Role` enum con `MANAGER` + scoping riporti (vedi sezione "(B) Permessi per ruolo").
-5. **Rimuovere il debug temporaneo**: `console.log [SPIKE-Q1]` in `lib/auth.ts` + box claim nel menu account (`AppShell`) + eventualmente i campi `w3id` in session se non più necessari alla UI.
+##### Prossimi step
 
-- **Priority**: 🟡 MED (blocca feature MANAGER; il role ADMIN attuale via `ADMIN_EMAILS` regge l'MVP)
-- **Stato**: ✅ SPIKE FATTO — ⏳ decisioni da confermare con manager/HR
+1. ✅ Verifica claim con manager (login: `ibmEdIsManager` Y/N confermato).
+2. ✅ `User.managerEmail` (migration) + popolamento in provisioning/proxy al login.
+3. ✅ Ruolo da claim: `computeRole` ADMIN(`ADMIN_EMAILS`) > MANAGER(`ibmEdIsManager`) > USER. **`ADMIN_EMAILS` mantenuto** (non sostituito).
+4. ✅ Enum `Role` esteso con `MANAGER`. ⏳ Scoping riporti + pagine MANAGER: vedi sezione **(B) → B1** (progettato, da implementare).
+5. ✅ Rimossi i `console.log [SPIKE-Q1]`. Box claim w3id nel menu account **mantenuto** volutamente (ispezione manager/HR) + campi `w3id` in session.
+6. ⏳ Chiarire `ibmEdHrActive` con HR.
+
+- **Priority**: 🟡 MED — infrastruttura ruoli FATTA; resta la feature MANAGER (pagine scoped, B1)
+- **Stato**: ✅ SPIKE FATTO + RUOLI IMPLEMENTATI — aperti solo `ibmEdHrActive` (HR) e le pagine MANAGER (B1)

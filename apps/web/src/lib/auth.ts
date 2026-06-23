@@ -2,6 +2,8 @@ import type { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import jwt from "jsonwebtoken";
 
+type AppRole = "USER" | "ADMIN" | "MANAGER";
+
 function isAdmin(email: string | null | undefined): boolean {
   if (!email) return false;
   const list = (process.env.ADMIN_EMAILS ?? "")
@@ -9,6 +11,22 @@ function isAdmin(email: string | null | undefined): boolean {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
   return list.includes(email.toLowerCase());
+}
+
+// Calcolo del ruolo al login (priorità):
+//   1. ADMIN  — email in ADMIN_EMAILS (override esplicito, indipendente dall'IdP)
+//   2. MANAGER — claim w3id `ibmEdIsManager === "Y"` (confermato empiricamente
+//      nello spike Q1: "Y" per i manager, "N" per i riporti)
+//   3. USER   — default
+// Nota: il MANAGER non ha ancora pagine dedicate (vedi TODO "(B) Permessi"):
+// per ora il ruolo è solo persistito, le pagine /admin/* restano ADMIN-only.
+function computeRole(
+  email: string | null | undefined,
+  isManagerClaim: string | undefined,
+): AppRole {
+  if (isAdmin(email)) return "ADMIN";
+  if (isManagerClaim === "Y") return "MANAGER";
+  return "USER";
 }
 
 // Allinea User.role nel DB col role appena calcolato dal JWT NextAuth.
@@ -23,7 +41,8 @@ async function syncRoleToBackend(payload: {
   provider: string;
   email: string;
   name?: string | null;
-  role: "USER" | "ADMIN";
+  role: AppRole;
+  managerEmail?: string;
 }): Promise<void> {
   const apiUrl = process.env.API_INTERNAL_URL ?? "http://localhost:3001";
   const secret = process.env.NEXTAUTH_SECRET;
@@ -39,6 +58,7 @@ async function syncRoleToBackend(payload: {
         email: payload.email,
         name: payload.name ?? undefined,
         role: payload.role,
+        managerEmail: payload.managerEmail,
       },
       secret,
       { algorithm: "HS256", expiresIn: "1h" },
@@ -87,15 +107,6 @@ export const authOptions: NextAuthOptions = {
       // via userinfo: NextAuth con type oidc fa la chiamata userinfo in automatico.
       style: { logo: "/ibmsso.svg", bg: "#fff", text: "#000" },
       profile(profile) {
-        // [SPIKE Q1 — DEBUG TEMPORANEO] Dump di TUTTI i claim restituiti da
-        // w3id (id_token + userinfo merge fatto da openid-client). Qui si vede
-        // se esistono attributi utili per i ruoli/riporti: manager, dept,
-        // employeeType, groups, ecc. RIMUOVERE prima del merge in main.
-        // NB: contiene PII (email, nome, forse serial) — censura prima di
-        // condividere il log.
-        console.log(
-          "[SPIKE-Q1] w3id profile claims:\n" + JSON.stringify(profile, null, 2),
-        );
         return {
           id: profile.sub,
           name: profile.name,
@@ -111,27 +122,28 @@ export const authOptions: NextAuthOptions = {
     // così il BFF può ri-firmare un JWT pulito per l'API.
     async jwt({ token, account, profile }) {
       if (account && profile) {
-        // [SPIKE Q1 — DEBUG TEMPORANEO] L'`account` contiene i token grezzi:
-        // id_token (JWT, decodificabile su jwt.io o con jwt.decode), access_token
-        // (serve per chiamare /userinfo o Graph manualmente). RIMUOVERE prima
-        // del merge in main.
-        console.log(
-          "[SPIKE-Q1] account (tokens):\n" + JSON.stringify(account, null, 2),
-        );
+        // Claim w3id: `profile` è tipizzato stretto da NextAuth, castiamo a
+        // record per leggere i campi custom dell'IdP IBM. Assenti per Google.
+        const p = profile as Record<string, unknown>;
+        const str = (v: unknown): string | undefined =>
+          typeof v === "string" && v.length > 0 ? v : undefined;
 
         token.provider = account.provider;
         token.providerSub = account.providerAccountId;
         token.email = profile.email ?? token.email;
         token.name = profile.name ?? token.name;
-        token.role = isAdmin(profile.email) ? "ADMIN" : "USER";
+        // Ruolo: ADMIN (ADMIN_EMAILS) > MANAGER (ibmEdIsManager==="Y") > USER.
+        // Const locale: TS non restringe `token.role` (tipato Role|undefined)
+        // dopo l'assegnazione, quindi riuso `role` per il sync sotto.
+        const role = computeRole(profile.email, str(p.ibmEdIsManager));
+        token.role = role;
+        // Email del manager diretto: persistita a DB (User.managerEmail) per
+        // ricostruire la gerarchia riporti, e tenuta nel token per il proxy.
+        const managerEmail = str(p.managerEmail);
+        token.managerEmail = managerEmail;
 
-        // [SPIKE Q1] Cattura i claim w3id rilevanti per ruoli/gerarchia, così
-        // li mostriamo nel menu account per verifica empirica. `profile` è
-        // tipizzato stretto da NextAuth: castiamo a record per leggere i
-        // campi custom dell'IdP IBM. Assenti per Google → token.w3id undefined.
-        const p = profile as Record<string, unknown>;
-        const str = (v: unknown): string | undefined =>
-          typeof v === "string" && v.length > 0 ? v : undefined;
+        // [SPIKE Q1] Claim w3id mostrati nel menu account (box temporaneo per
+        // ispezione manager/HR). Assenti per Google → token.w3id undefined.
         const w3id = {
           employeeType: str(p.ibmEdEmployeeType),
           hrActive: str(p.ibmEdHrActive),
@@ -141,23 +153,22 @@ export const authOptions: NextAuthOptions = {
           managerLastName: str(p.managerLastName),
           jobResponsibilities: str(p.ibmEdJobResponsibilities),
         };
-        // Salva solo se almeno un campo è valorizzato (evita oggetto vuoto
-        // per i login Google).
         if (Object.values(w3id).some((v) => v !== undefined)) {
           token.w3id = w3id;
         }
 
-        // Allinea User.role del DB col role appena calcolato. Side effect
+        // Allinea User.role + managerEmail del DB col token. Side effect
         // fire-and-forget: il login non blocca se la sync fallisce. Senza
-        // questa, il DB resterebbe "drift" da `ADMIN_EMAILS` perché nessun
-        // consumer dell'app chiama mai `/me` a runtime.
+        // questa, il DB resterebbe "drift" perché nessun consumer dell'app
+        // chiama mai `/me` a runtime.
         if (token.email && token.providerSub && token.provider) {
           void syncRoleToBackend({
             sub: token.providerSub,
             provider: token.provider,
             email: token.email,
             name: token.name,
-            role: token.role,
+            role,
+            managerEmail,
           });
         }
       }

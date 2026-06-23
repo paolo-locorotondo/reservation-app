@@ -28,6 +28,10 @@ async function handler(req: NextRequest, ctx: { params: { path: string[] } }) {
       email: token.email,
       name: token.name,
       role: token.role ?? "USER",
+      // Forward managerEmail (persistito nel token NextAuth dal login w3id) così
+      // il provisioning lato API può mantenerlo allineato. Omesso → il backend
+      // non azzera il valore già a DB (spread condizionale in provisionFromToken).
+      managerEmail: token.managerEmail,
     },
     secret,
     { algorithm: "HS256", expiresIn: "1h" },

@@ -16,8 +16,14 @@ export class UsersService {
    * Allinea anche displayName e role al payload corrente.
    */
   async provisionFromToken(payload: JwtPayload): Promise<User> {
-    const { provider, sub: providerSub, email, name, role } = payload;
+    const { provider, sub: providerSub, email, name, role, managerEmail } = payload;
     const displayName = name?.trim() || email;
+
+    // `managerEmail` lo scriviamo solo quando il token lo porta (login w3id):
+    // un token che NON lo include (es. proxy per-request senza il claim, o
+    // login Google) non deve azzerare il valore già a DB. Spread condizionale.
+    const managerEmailData =
+      managerEmail !== undefined ? { managerEmail } : {};
 
     const account = await this.prisma.account.findUnique({
       where: { provider_providerSub: { provider, providerSub } },
@@ -26,7 +32,7 @@ export class UsersService {
     if (account) {
       return this.prisma.user.update({
         where: { id: account.userId },
-        data: { displayName, role: role as Role },
+        data: { displayName, role: role as Role, ...managerEmailData },
       });
     }
 
@@ -37,7 +43,7 @@ export class UsersService {
       });
       return this.prisma.user.update({
         where: { id: existing.id },
-        data: { displayName, role: role as Role },
+        data: { displayName, role: role as Role, ...managerEmailData },
       });
     }
 
@@ -46,6 +52,7 @@ export class UsersService {
         email,
         displayName,
         role: role as Role,
+        ...managerEmailData,
         accounts: { create: { provider, providerSub } },
       },
     });
