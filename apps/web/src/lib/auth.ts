@@ -122,8 +122,14 @@ export const authOptions: NextAuthOptions = {
       authorization: { params: { scope: 'openid profile email' } },
       // Alcuni tenant w3id non espongono `email`/`name` nell'id_token ma solo
       // via userinfo: NextAuth con type oidc fa la chiamata userinfo in automatico.
-      style: { logo: "/ibmsso.svg", bg: "#fff", text: "#000" },
+      style: { logo: "/ibmsso.svg", bg: "#fff", text: "#000" },      
       profile(profile) {
+        /* 
+        // decommenta per debug [SPIKE-Q1]
+        console.log(
+          "[SPIKE-Q1] w3id profile claims:\n" + JSON.stringify(profile, null, 2),
+        ); 
+        */
         return {
           id: profile.sub,
           name: profile.name,
@@ -144,7 +150,12 @@ export const authOptions: NextAuthOptions = {
         const p = profile as Record<string, unknown>;
         const str = (v: unknown): string | undefined =>
           typeof v === "string" && v.length > 0 ? v : undefined;
-
+        /* 
+        // decommenta per debug [SPIKE-Q1]
+        console.log(
+          "[SPIKE-Q1] account (tokens):\n" + JSON.stringify(account, null, 2),
+        );
+         */
         token.provider = account.provider;
         token.providerSub = account.providerAccountId;
         token.email = profile.email ?? token.email;
