@@ -1,4 +1,4 @@
-import { Tile, Button } from "@carbon/react";
+import { Button } from "@carbon/react";
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -19,20 +19,22 @@ export default async function Home() {
   }
 
   return (
-    <main style={{ padding: "2rem", maxWidth: "720px" }}>
-      <h1 style={{ marginBottom: "0.5rem" }}>Reservation App</h1>
-      <p style={{ marginBottom: "2rem", color: "#525252" }}>
-        Prenotazione posti auto e scrivanie nelle sedi IBM.
-      </p>
-      <Tile>
-        <h3 style={{ marginBottom: "1rem" }}>Accedi</h3>
-        <p style={{ marginBottom: "1rem" }}>
-          Per usare l&apos;applicazione devi autenticarti col tuo account aziendale.
+    <main className="rsv-auth-main">
+      <div className="rsv-auth-card">
+        <div className="rsv-auth-bar" />
+        <h1 style={{ marginBottom: "0.75rem" }}>
+          <strong>IBM</strong> Reservation App
+        </h1>
+        <p style={{ marginBottom: "1.5rem", color: "#525252", lineHeight: 1.5 }}>
+          Prenotazione posti auto e scrivanie nelle sedi IBM
+        </p>
+        <p style={{ marginBottom: "1.5rem", color: "#525252", lineHeight: 1.5 }}>
+          Per usare l&apos;applicazione accedi col tuo account aziendale.
         </p>
         <Link href="/login">
           <Button>Vai al login</Button>
         </Link>
-      </Tile>
+      </div>
     </main>
   );
 }

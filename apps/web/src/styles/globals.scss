@@ -135,6 +135,34 @@ main {
   background-color: #fcf4d6; // Carbon yellow-10
 }
 
+// Card "auth" condivisa da landing (/) e login: stesso look della pagina di
+// manutenzione (vedi maintenance-html.ts) — card bianca centrata con barretta
+// blu d'accento. Tenuta in sync a mano con maintenance-html.ts (che è HTML
+// standalone Edge e non può importare questo SCSS).
+.rsv-auth-main {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+.rsv-auth-card {
+  max-width: 480px;
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 2.5rem 2rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+.rsv-auth-bar {
+  height: 4px;
+  width: 48px;
+  background: #0f62fe; // Carbon blue-60
+  border-radius: 2px;
+  margin-bottom: 1.5rem;
+}
+
 // Modal admin di gestione prenotazione: quando l'admin sta aggiornando
 // l'intestatario (transfer), il primary button passa da rosso "Cancella" a
 // arancione "Aggiorna" per segnalare che l'azione modifica anziché

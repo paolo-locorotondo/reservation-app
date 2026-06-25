@@ -3,7 +3,7 @@
 import { Suspense } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
-import { Button, Tile } from "@carbon/react";
+import { Button } from "@carbon/react";
 import Image from "next/image";
 
 interface Props {
@@ -59,16 +59,19 @@ function LoginButtons({ googleEnabled, ibmssoEnabled }: Props) {
 
 export function LoginPanel({ googleEnabled, ibmssoEnabled }: Props) {
   return (
-    <main style={{ maxWidth: 480, margin: "4rem auto", padding: "0 1rem" }}>
-      <Tile>
-        <h1 style={{ marginBottom: "0.5rem" }}>Reservation App</h1>
-        <p style={{ marginBottom: "2rem", color: "#525252" }}>
+    <main className="rsv-auth-main">
+      <div className="rsv-auth-card">
+        <div className="rsv-auth-bar" />
+        <h1 style={{ marginBottom: "0.5rem" }}>
+          <strong>IBM</strong> Reservation App
+        </h1>
+        <p style={{ marginBottom: "2rem", color: "#525252", lineHeight: 1.5 }}>
           Accedi per prenotare posti auto e scrivanie.
         </p>
         <Suspense fallback={<Button disabled>Caricamento…</Button>}>
           <LoginButtons googleEnabled={googleEnabled} ibmssoEnabled={ibmssoEnabled} />
         </Suspense>
-      </Tile>
+      </div>
     </main>
   );
 }
