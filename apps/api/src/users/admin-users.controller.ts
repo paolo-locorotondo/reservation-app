@@ -17,10 +17,21 @@ export class AdminUsersController {
   constructor(private prisma: PrismaService) {}
 
   @Get()
-  list() {
-    return this.prisma.user.findMany({
+  async list() {
+    const users = await this.prisma.user.findMany({
       orderBy: { displayName: "asc" },
-      select: { id: true, email: true, displayName: true },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        // Gruppo di riserva di appartenenza (C7.1): serve all'editor gruppi per
+        // avvisare che assegnare un utente già in un gruppo lo SPOSTA.
+        reservedGroup: { select: { name: true } },
+      },
     });
+    return users.map(({ reservedGroup, ...u }) => ({
+      ...u,
+      reservedGroupName: reservedGroup?.name ?? null,
+    }));
   }
 }

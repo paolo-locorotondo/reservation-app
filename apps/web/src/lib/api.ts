@@ -12,6 +12,9 @@ import type {
   ReservationStatus,
   Closure,
   AdminCreateClosureDto,
+  SpotGroupsResponse,
+  SpotGroupDetail,
+  AdminCreateSpotGroupDto,
 } from "@reservation/shared";
 
 // Mia prenotazione, come restituita da GET /reservations/me — include lo spot
@@ -76,6 +79,21 @@ export interface AdminUserItem {
   id: string;
   email: string;
   displayName: string;
+  // Gruppo di riserva di appartenenza (C7.1), null se nessuno. Popolato da
+  // /admin/users; usato dall'editor gruppi per avvisare dello spostamento
+  // (un utente sta in al più un gruppo). Opzionale: /manager/users non lo
+  // valorizza (non serve lì).
+  reservedGroupName?: string | null;
+}
+
+// Risposta di GET /me: identità dell'utente loggato + gruppo di riserva (C7.1,
+// letto fresco da DB, non dal JWT).
+export interface MeResponse {
+  id: string;
+  email: string;
+  displayName: string;
+  role: "USER" | "ADMIN" | "MANAGER";
+  reservedGroupName: string | null;
 }
 
 // Response wrapper di GET /spots e /admin/spots: il vecchio shape era
@@ -164,6 +182,7 @@ export const api = {
     if (params.zoneName) qs.set("zoneName", params.zoneName);
     return call<SpotsAvailabilityDay[]>(`/spots/availability?${qs.toString()}`);
   },
+  getMe: () => call<MeResponse>("/me"),
   createReservation: (dto: CreateReservationDto) =>
     call<Reservation>("/reservations", {
       method: "POST",
@@ -201,10 +220,20 @@ export const api = {
   // vincoli temporali (ammesse date passate e oltre MAX_DAYS_AHEAD) e il
   // check Closure (l'admin vede tutti gli spot anche su giorni bloccati,
   // così può decidere di pre-caricare prenotazioni storiche se serve).
-  listAdminSpots: (params: { type: SpotType; date: string; siteId?: string; floorId?: string }) => {
+  listAdminSpots: (params: {
+    type: SpotType;
+    date: string;
+    siteId?: string;
+    floorId?: string;
+    // Utente TARGET: se passato, il backend calcola l'eligibilità per lui
+    // (`available=false`/`lockedForMe` sugli spot che NON può prenotare), così
+    // il dialog "Prenota per utente" mostra solo i posti prenotabili da lui.
+    userId?: string;
+  }) => {
     const qs = new URLSearchParams({ type: params.type, date: params.date });
     if (params.siteId) qs.set("siteId", params.siteId);
     if (params.floorId) qs.set("floorId", params.floorId);
+    if (params.userId) qs.set("userId", params.userId);
     return call<SpotsListResponse>(`/admin/spots?${qs.toString()}`);
   },
   // Admin: prenota per conto di un altro utente. Stessi vincoli di
@@ -332,5 +361,28 @@ export const api = {
     call<{ deleted: number }>("/admin/closures/bulk-delete", {
       method: "POST",
       body: JSON.stringify({ ids }),
+    }),
+  // --- Spot groups (postazioni riservate, C7) — solo ADMIN ---
+  // Lista gruppi (nome + conteggi) + riepilogo capienza per tipo.
+  listSpotGroups: () => call<SpotGroupsResponse>("/admin/spot-groups"),
+  // Dettaglio: membri espansi + id postazioni assegnate.
+  getSpotGroup: (id: string) => call<SpotGroupDetail>(`/admin/spot-groups/${id}`),
+  createSpotGroup: (dto: AdminCreateSpotGroupDto) =>
+    call<{ id: string; name: string }>("/admin/spot-groups", {
+      method: "POST",
+      body: JSON.stringify(dto),
+    }),
+  deleteSpotGroup: (id: string) =>
+    call<{ id: string }>(`/admin/spot-groups/${id}`, { method: "DELETE" }),
+  // Replace membri/postazioni (il client manda l'elenco completo).
+  setSpotGroupMembers: (id: string, userIds: string[]) =>
+    call<{ count: number }>(`/admin/spot-groups/${id}/members`, {
+      method: "PUT",
+      body: JSON.stringify({ userIds }),
+    }),
+  setSpotGroupSpots: (id: string, spotIds: string[]) =>
+    call<{ count: number }>(`/admin/spot-groups/${id}/spots`, {
+      method: "PUT",
+      body: JSON.stringify({ spotIds }),
     }),
 };

@@ -1,6 +1,6 @@
 # Authorization Matrix
 
-> **Snapshot del 2026-06-22.** La sorgente di verità sono:
+> **Snapshot del 2026-06-26.** La sorgente di verità sono:
 > - i controller NestJS in [`apps/api/src/**/*.controller.ts`](../apps/api/src) (guard `JwtAuthGuard` + `RolesGuard` + decoratore `@Roles`);
 > - il matcher + la logica di [`apps/web/src/middleware.ts`](../apps/web/src/middleware.ts) (protezione pagine Next.js);
 > - il route handler del BFF proxy [`apps/web/src/app/api/proxy/[...path]/route.ts`](../apps/web/src/app/api/proxy/%5B...path%5D/route.ts) (firma il JWT per l'API; 401 se non c'è sessione).
@@ -45,6 +45,7 @@ Protezione applicata da [`middleware.ts`](../apps/web/src/middleware.ts). Il mat
 | `/manager/reservations` | ↪ | ❌ | ✅ | ❌ | Solo MANAGER (l'admin usa `/admin/*`; gate pagina coerente col gate API `@Roles(MANAGER)`) |
 | `/admin/reservations` | ↪ | ❌ | ❌ | ✅ | |
 | `/admin/closures` | ↪ | ❌ | ❌ | ✅ | |
+| `/admin/spot-groups` | ↪ | ❌ | ❌ | ✅ | Gestione gruppi di riserva postazioni (C7) |
 
 > **Ordine di valutazione del middleware**: il callback `authorized` di `withAuth` (richiede `token` presente) gira **prima** della funzione middleware. GUEST (nessun token) → redirect a `/login` *prima* del check del ruolo. USER su `/admin/*` (token presente, ruolo ≠ ADMIN) → la funzione middleware gira e redirige a `/403`.
 
@@ -84,6 +85,12 @@ Tutte le route sono dietro il proxy: il browser non parla mai direttamente con N
 | `POST /admin/closures` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (bulk-create) |
 | `POST /admin/closures/bulk-delete` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` |
 | `DELETE /admin/closures/:id` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` |
+| `GET /admin/spot-groups` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (lista gruppi + capienza per sede, C7) |
+| `POST /admin/spot-groups` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (crea gruppo) |
+| `GET /admin/spot-groups/:id` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (dettaglio: membri + postazioni) |
+| `DELETE /admin/spot-groups/:id` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (elimina; postazioni tornano aperte a tutti) |
+| `PUT /admin/spot-groups/:id/members` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (replace membri) |
+| `PUT /admin/spot-groups/:id/spots` | 🚪 | 🔒 | 🔒 | ✅ | `RolesGuard ADMIN` (replace postazioni riservate) |
 
 ## Note
 
@@ -95,6 +102,14 @@ Tutte le route sono dietro il proxy: il browser non parla mai direttamente con N
   - `DELETE /reservations/:id` → [`ReservationsService.cancel`](../apps/api/src/reservations/reservations.service.ts) con `isAdmin=false` verifica `r.userId === userId`; se non combacia ritorna **404** (non 403, per non rivelare l'esistenza di prenotazioni altrui). Gli endpoint admin passano `isAdmin=true` e saltano il check.
 
 - **Closure non bloccano l'admin a livello di guard ma a livello di business**: `POST /admin/reservations` (e bulk) chiamano `create()` che applica `assertNotBlocked` → 409 se il giorno è bloccato. Non è autorizzazione (è una regola di business), quindi non compare in questa matrice.
+
+- **Postazioni riservate (C7 + C7.1) — eligibilità a livello di business, non di guard**: l'eligibilità è bidirezionale e NON è espressa dal `RolesGuard` (vale per qualunque ruolo, ADMIN incluso quando prenota *per* un utente). Regola unica in `SpotGroupsService.isSpotBookable` ([spot-groups.service.ts](../apps/api/src/spot-groups/spot-groups.service.ts)):
+  - **C7 (vincolo sullo spot)**: una postazione con `reservedGroupId` è prenotabile solo dai membri di quel gruppo.
+  - **C7.1 (vincolo inverso sul membro, per-tipo)**: un membro di un gruppo che riserva postazioni di un certo tipo può prenotare, per quel tipo, **solo** le postazioni del suo gruppo (niente posti aperti, niente fallback). Per i tipi non coperti dal suo gruppo si comporta come un utente normale.
+  - **Appartenenza esclusiva**: un utente sta in al più un gruppo (FK `User.reservedGroupId`).
+  - `GET /spots` / `GET /spots/availability` marcano gli spot con `lockedForMe`/`reservedGroupName` e contano come disponibili solo quelli prenotabili dall'utente target (totali *eligibility-aware*). Per uno spot aperto bloccato dal vincolo inverso `reservedGroupName` è null (la UI mostra un messaggio dedicato).
+  - `POST /reservations` e i flussi admin/manager `create`/`bulkCreate` rifiutano (**403** / skip nel bulk) gli spot non prenotabili dall'intestatario, con messaggio diverso per i due casi.
+  - La chiusura ha priorità sulla riserva (closure check prima dell'eligibilità).
 
 - **Rotte completamente pubbliche** (non nel matcher di `middleware.ts`, nessun guard):
   - tutte le route `/api/auth/*` (gestite da NextAuth)

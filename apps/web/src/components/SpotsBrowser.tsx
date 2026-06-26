@@ -449,17 +449,34 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
       )}
 
       {view === "calendar" ? (
-        <SpotsCalendar
-          type={type}
-          siteId={siteId}
-          floorId={floorId}
-          zoneName={colFilters.zone}
-          myReservedDates={myReservedDates}
-          onDayClick={(iso) => {
-            setDate(iso);
-            setView("list");
-          }}
-        />
+        <>
+          <div
+            className="rsv-table-toolbar"
+            style={{ justifyContent: "flex-end" }}
+          >
+            <IconButton
+              kind="ghost"
+              size="sm"
+              label="Aggiorna disponibilità"
+              align="bottom-right"
+              onClick={() => setReloadTick((t) => t + 1)}
+            >
+              <Renew />
+            </IconButton>
+          </div>
+          <SpotsCalendar
+            type={type}
+            siteId={siteId}
+            floorId={floorId}
+            zoneName={colFilters.zone}
+            myReservedDates={myReservedDates}
+            reloadTick={reloadTick}
+            onDayClick={(iso) => {
+              setDate(iso);
+              setView("list");
+            }}
+          />
+        </>
       ) : (
       <>
       <div className="rsv-table-toolbar">
@@ -639,6 +656,7 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
                         className={available ? "rsv-row-available" : "rsv-row-occupied"}
                         onClick={() => {
                           if (!available) return;
+                          // (lockedForMe è già incluso in !available lato backend)
                           setBookingTarget({
                             spotId: row.id,
                             spotCode: code,
@@ -654,7 +672,15 @@ export function SpotsBrowser({ type, title, initialDate }: Props) {
                             zoneName: spot?.zoneName ?? null,
                           });
                         }}
-                        title={available ? "Clicca per prenotare" : "Posto non disponibile"}
+                        title={
+                          available
+                            ? "Clicca per prenotare"
+                            : spot?.lockedForMe
+                              ? spot.reservedGroupName
+                                ? `Riservato a ${spot.reservedGroupName}`
+                                : "Fai parte di un gruppo con postazioni riservate: per questo tipo puoi prenotare solo quelle del tuo gruppo"
+                              : "Posto non disponibile"
+                        }
                       >
                         {row.cells.map((cell) => (
                           <TableCell key={cell.id}>{String(cell.value)}</TableCell>

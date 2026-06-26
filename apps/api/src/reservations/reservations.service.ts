@@ -21,6 +21,10 @@ import {
 } from "@reservation/shared";
 import type { SpotType } from "@prisma/client";
 import { ClosuresService } from "../closures/closures.service";
+import {
+  SpotGroupsService,
+  isSpotBookable,
+} from "../spot-groups/spot-groups.service";
 
 // Lookup env-based con fallback alla costante shared. Pattern simmetrico a
 // `MAX_DAYS_AHEAD` in `common/business-rules.ts`: il valore numerico dalla
@@ -51,6 +55,7 @@ export class ReservationsService {
   constructor(
     private prisma: PrismaService,
     private closures: ClosuresService,
+    private spotGroups: SpotGroupsService,
   ) {}
 
   /**
@@ -87,6 +92,7 @@ export class ReservationsService {
         id: true,
         type: true,
         active: true,
+        reservedGroupId: true,
         floor: { select: { siteId: true } },
       },
     });
@@ -97,11 +103,28 @@ export class ReservationsService {
     // rifiutiamo con 409 + reason. Vale anche per l'admin: se HR ha
     // dichiarato il giorno chiuso, anche le prenotazioni "per conto di"
     // vanno rifiutate (a meno che HR non rimuova prima il blocco).
+    // NB: la closure ha priorità sulla riserva (check prima).
     await this.closures.assertNotBlocked({
       date,
       siteId: spot.floor.siteId,
       spotType: spot.type,
     });
+
+    // Check riserva (C7 + C7.1): l'intestatario (`userId`) deve poter prenotare
+    // QUESTO spot secondo `isSpotBookable`. Vale anche per admin/manager
+    // "prenota per": l'eligibilità è dell'utente target, non del chiamante.
+    // Due casi di rifiuto con messaggio dedicato:
+    //  - spot riservato ad altri (o a un gruppo a cui l'utente non appartiene);
+    //  - spot aperto ma l'utente è membro di un gruppo che riserva quel tipo
+    //    (vincolo inverso: può prenotare solo le sue).
+    const eligibility = await this.spotGroups.getUserEligibility(userId);
+    if (!isSpotBookable(spot, eligibility)) {
+      throw new ForbiddenException(
+        spot.reservedGroupId !== null
+          ? "postazione riservata: l'utente non fa parte del gruppo abilitato"
+          : "l'utente fa parte di un gruppo con postazioni riservate e per questo tipo può prenotare solo quelle del proprio gruppo",
+      );
+    }
 
     // Usa `spotType` direttamente (denormalizzato): niente join verso Spot.
     const existing = await this.prisma.reservation.findFirst({
@@ -368,6 +391,7 @@ export class ReservationsService {
       type: SpotType;
       active: boolean;
       siteId: string;
+      reservedGroupId: string | null;
     };
     const spotById = new Map<string, SpotInfo>();
     let poolSpotIds: string[] = [];
@@ -379,6 +403,7 @@ export class ReservationsService {
           id: true,
           type: true,
           active: true,
+          reservedGroupId: true,
           floor: { select: { siteId: true } },
         },
       });
@@ -388,6 +413,7 @@ export class ReservationsService {
           type: s.type,
           active: s.active,
           siteId: s.floor.siteId,
+          reservedGroupId: s.reservedGroupId,
         });
       }
     } else {
@@ -402,6 +428,7 @@ export class ReservationsService {
           id: true,
           type: true,
           active: true,
+          reservedGroupId: true,
           floor: { select: { siteId: true } },
         },
         orderBy: { code: "asc" },
@@ -412,10 +439,24 @@ export class ReservationsService {
           type: s.type,
           active: s.active,
           siteId: s.floor.siteId,
+          reservedGroupId: s.reservedGroupId,
         });
         poolSpotIds.push(s.id);
       }
     }
+
+    // 3b) Pre-fetch eligibilità (C7 + C7.1) per TUTTI gli utenti del batch, in
+    // poche query: il gruppo (unico) di ciascuno e i tipi che copre. `isEligible`
+    // applica `isSpotBookable` (riservato → solo i miei; aperto → ok salvo
+    // vincolo inverso per i tipi coperti).
+    const eligByUser = await this.spotGroups.getUsersEligibility(dto.userIds);
+    const isEligible = (
+      userId: string,
+      spot: { reservedGroupId: string | null; type: SpotType },
+    ): boolean => {
+      const e = eligByUser.get(userId);
+      return e ? isSpotBookable(spot, e) : spot.reservedGroupId === null;
+    };
 
     // 4) Pre-fetch closure nel range — match locale via predicate.
     const closures = await this.closures.findAllInRange({ from, to });
@@ -519,13 +560,31 @@ export class ReservationsService {
             skipped.push({ userId, date: dateIso, reason: "posto non attivo" });
             continue;
           }
+          // Riserva (C7 + C7.1): spot non prenotabile da quell'utente → skip
+          // esplicito (l'admin ha mappato un posto non valido). Due cause:
+          // riservato ad altri, oppure posto aperto ma l'utente è vincolato a
+          // un gruppo che riserva quel tipo (vincolo inverso).
+          if (!isEligible(userId, info)) {
+            skipped.push({
+              userId,
+              date: dateIso,
+              reason:
+                info.reservedGroupId !== null
+                  ? "postazione riservata a un gruppo di cui l'utente non fa parte"
+                  : "l'utente è in un gruppo con postazioni riservate: per questo tipo può prenotare solo quelle del suo gruppo",
+            });
+            continue;
+          }
           chosen = info;
         } else {
-          // Pool: primo spot della sede/tipo non ancora occupato per quella data.
+          // Pool: primo spot della sede/tipo non ancora occupato per quella
+          // data E su cui l'utente è eleggibile (gli spot riservati ad altri
+          // gruppi vengono saltati nella ricerca).
           const takenForDate = spotsTakenByDate.get(dateIso);
           for (const sid of poolSpotIds) {
-            if (!takenForDate?.has(sid)) {
-              chosen = spotById.get(sid) ?? null;
+            const cand = spotById.get(sid);
+            if (cand && !takenForDate?.has(sid) && isEligible(userId, cand)) {
+              chosen = cand;
               break;
             }
           }

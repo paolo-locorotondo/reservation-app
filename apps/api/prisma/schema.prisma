@@ -42,6 +42,15 @@ model User {
   email        String        @unique
   displayName  String
   role         Role          @default(USER)
+  // Gruppo di riserva di cui l'utente è membro (C7.1). Appartenenza ESCLUSIVA:
+  // un utente sta in al più un gruppo (FK singolo, non M:N). Motivo: una
+  // persona in due gruppi prenoterebbe un solo posto coprendo due categorie,
+  // falsando la garanzia di capienza. Un membro può prenotare SOLO le
+  // postazioni del suo gruppo per i tipi che il gruppo riserva (vincolo
+  // inverso). onDelete: SetNull → cancellare il gruppo libera i membri.
+  // Gestione membership solo ADMIN.
+  reservedGroupId String?
+  reservedGroup   SpotGroup?  @relation(fields: [reservedGroupId], references: [id], onDelete: SetNull)
   // Email del manager diretto, dal claim w3id `managerEmail` al login. Chiave
   // per ricostruire la gerarchia "dal basso": i riporti diretti di un manager
   // sono gli User con `managerEmail` = email del manager. Nullable: assente
@@ -59,6 +68,7 @@ model User {
   updatedAt    DateTime      @updatedAt
 
   @@index([managerEmail])
+  @@index([reservedGroupId])
 }
 
 // Identità federata: collega un utente a uno o più provider IdP (Google, Entra, …).
@@ -112,12 +122,33 @@ model Spot {
   floorId      String
   zoneId       String?
   active       Boolean       @default(true)
+  // Riserva (C7): se valorizzato, lo spot è prenotabile SOLO dai membri del
+  // gruppo. null = aperto a tutti (default). onDelete: SetNull → cancellare un
+  // gruppo libera le sue postazioni invece di cancellarle a cascata.
+  reservedGroupId String?
   floor        Floor         @relation(fields: [floorId], references: [id], onDelete: Cascade)
   zone         Zone?         @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  reservedGroup SpotGroup?   @relation(fields: [reservedGroupId], references: [id], onDelete: SetNull)
   reservations Reservation[]
 
   @@unique([floorId, code])
   @@index([type, active])
+  @@index([reservedGroupId])
+}
+
+// Gruppo di riserva postazioni (C7). HR (ADMIN) crea gruppi tematici
+// ("Stagisti", "Tutor", "Primo intervento"), vi assegna membri e postazioni.
+// Le postazioni con `reservedGroupId` = questo gruppo sono prenotabili solo
+// dai `members`. Capacità garantita per categoria = numero di spot riservati
+// al gruppo.
+model SpotGroup {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  // Membri del gruppo (C7.1): relazione 1:N via User.reservedGroupId
+  // (appartenenza esclusiva — un utente sta in al più un gruppo).
+  members   User[]
+  spots     Spot[]
 }
 
 model Reservation {
@@ -166,6 +197,11 @@ model Reservation {
   // sulla stessa slot.
   @@index([userId, date])
   @@index([date, status])
+  // Audit (C5): indici sugli attori, già creati dalla migration
+  // 20260622120000_add_reservation_audit_actors ma mancanti qui (drift
+  // sanato). Utili per filtrare/ordinare per creatore/cancellatore.
+  @@index([createdByUserId])
+  @@index([cancelledByUserId])
 }
 
 // Giorni bloccati (festività, chiusure di sede, manutenzioni). Le prenotazioni

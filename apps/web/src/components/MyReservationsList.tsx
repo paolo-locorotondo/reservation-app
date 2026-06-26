@@ -527,6 +527,18 @@ function ReservationsTab({
           calendar è renderizzato sotto la fine del view branch. */}
       {view === "calendar" ? (
         <>
+          <div className="rsv-table-toolbar" style={{ justifyContent: "flex-end" }}>
+            <IconButton
+              kind="ghost"
+              size="sm"
+              label="Aggiorna prenotazioni"
+              align="bottom-right"
+              onClick={onReload}
+              disabled={loading}
+            >
+              <Renew />
+            </IconButton>
+          </div>
           {error && (
             <InlineNotification
               kind="error"

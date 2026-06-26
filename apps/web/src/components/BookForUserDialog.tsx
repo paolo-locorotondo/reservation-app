@@ -116,8 +116,10 @@ export function BookForUserDialog({ target, users, onClose, onSuccess }: Props) 
       .catch((e: ApiError) => setError(`Caricamento piani: ${e.message}`));
   }, [siteId]);
 
-  // Spots al cambio di sede/piano/data/tipo. Riusa `listSpots` con
-  // `available` flag già calcolato dal backend per quella data.
+  // Spots al cambio di sede/piano/data/tipo/utente. Riusa `listSpots` con
+  // `available` flag già calcolato dal backend per quella data. Passiamo
+  // `userId` (target): così gli spot non prenotabili da lui (riservati ad altri
+  // o vincolo inverso C7.1) hanno `available=false` e spariscono dalla lista.
   useEffect(() => {
     if (!target || !siteId || !date) {
       setSpots([]);
@@ -130,14 +132,17 @@ export function BookForUserDialog({ target, users, onClose, onSuccess }: Props) 
         date,
         siteId,
         floorId: floorId || undefined,
+        userId: userId || undefined,
       })
       .then((res) => {
         if (cancelled) return;
         setSpots(res.items);
-        // Se lo spot selezionato non è più nella lista (cambio piano/sede),
-        // resetta. Se è ancora valido ma non più available, lascia: il
-        // backend rifiuterà al submit con messaggio chiaro.
-        setSpotId((prev) => (prev && res.items.some((s) => s.id === prev) ? prev : ""));
+        // Resetta lo spot selezionato se non è più PRENOTABILE per la nuova
+        // combinazione di filtri/utente (es. cambio utente → lo spot diventa
+        // riservato/lockato): evita di inviare un id stantio che darebbe 403.
+        setSpotId((prev) =>
+          prev && res.items.some((s) => s.id === prev && s.available) ? prev : "",
+        );
       })
       .catch((e: ApiError) => {
         if (cancelled) return;
@@ -146,7 +151,7 @@ export function BookForUserDialog({ target, users, onClose, onSuccess }: Props) 
     return () => {
       cancelled = true;
     };
-  }, [target, siteId, floorId, date]);
+  }, [target, siteId, floorId, date, userId]);
 
   const availableSpots = useMemo(() => spots.filter((s) => s.available), [spots]);
 

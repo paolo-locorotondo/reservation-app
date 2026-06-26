@@ -27,6 +27,7 @@ import {
 } from "@carbon/react";
 import { UserAvatar, Car, Devices, Calendar, Group, Home } from "@carbon/icons-react";
 import type { ComponentType, ReactNode } from "react";
+import { api } from "@/lib/api";
 
 // Voce di nav. Le voci con `children` si rendono come dropdown
 // (Carbon `HeaderMenu` su desktop, `SideNavMenu` su mobile drawer); cliccare
@@ -57,6 +58,7 @@ const NAV: NavItem[] = [
     children: [
       { label: "Prenotazioni", href: "/admin/reservations", Icon: Group },
       { label: "Chiusure", href: "/admin/closures", Icon: Group },
+      { label: "Postazioni riservate", href: "/admin/spot-groups", Icon: Group },
     ],
   },
   {
@@ -85,6 +87,24 @@ export function AppShell({ children }: { children: ReactNode }) {
   const email = session?.user?.email ?? "";
   // [SPIKE Q1] Claim w3id mostrati nel menu account (solo login ibmsso).
   const w3id = session?.user?.w3id;
+  // Gruppo di riserva (C7.1): non è nel JWT (assegnato dall'admin DOPO il
+  // login) → letto fresco da /me e mostrato nel menu account.
+  const [reservedGroupName, setReservedGroupName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!email) return;
+    let cancelled = false;
+    api
+      .getMe()
+      .then((m) => {
+        if (!cancelled) setReservedGroupName(m.reservedGroupName);
+      })
+      .catch(() => {
+        /* best-effort: il menu funziona anche senza */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [email]);
   // Voci nav filtrate per ruolo: una voce con `roles` è visibile solo se il
   // ruolo della session è incluso (vedi types/next-auth.d.ts + lib/auth.ts).
   // Senza `roles` → visibile a tutti.
@@ -297,6 +317,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <div className="rsv-user-panel-name">{displayName || email || "Utente"}</div>
                   {email && email !== displayName && (
                     <div className="rsv-user-panel-email">{email}</div>
+                  )}
+                  {/* Gruppo di riserva di appartenenza (C7.1), se assegnato. */}
+                  {reservedGroupName && (
+                    <div className="rsv-user-panel-group">
+                      <span>Gruppo riservato:</span> {reservedGroupName}
+                    </div>
                   )}
                   {/* [SPIKE Q1] Claim w3id per ispezione (verifica con
                       manager/HR). Visibili solo per login ibmsso. Da rimuovere

@@ -102,6 +102,18 @@ export class UsersService {
   }
 
   /**
+   * Nome del gruppo di riserva di cui l'utente è membro (C7.1), o null.
+   * Usato da GET /me per mostrarlo nel menu account.
+   */
+  async getReservedGroupName(userId: string): Promise<string | null> {
+    const u = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { reservedGroup: { select: { name: true } } },
+    });
+    return u?.reservedGroup?.name ?? null;
+  }
+
+  /**
    * Risolve l'utente dal token JWT senza fare scritture, hot-path delle API.
    * Se l'account non esiste ancora (utente non è mai passato da `/me`), fa fallback
    * al provisioning completo per non rompere il flusso.

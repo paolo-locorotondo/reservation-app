@@ -75,6 +75,9 @@ interface Props {
   // calendar con `showAvailability=false`) per popolare comunque l'overlay
   // grigio "giorno bloccato" via fetch separata lato parent (GET /closures).
   closuresByDate?: Map<string, string>;
+  // Incrementato dal parent (bottone Aggiorna) per forzare il re-fetch della
+  // disponibilità senza cambiare mese/filtri.
+  reloadTick?: number;
 }
 
 function isoFromUtc(d: Date): string {
@@ -121,6 +124,7 @@ export function SpotsCalendar({
   disableOutOfRange = false,
   initialMonth,
   closuresByDate,
+  reloadTick = 0,
 }: Props) {
   const [currentMonth, setCurrentMonth] = useState(() =>
     initialMonth ? startOfMonthUtc(initialMonth) : startOfMonthUtc(todayUtc()),
@@ -216,7 +220,7 @@ export function SpotsCalendar({
     };
     // currentMonth.getTime() invece dell'oggetto Date per stabilizzare la dep
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showAvailability, type, siteId, floorId, zoneName, currentMonth.getTime()]);
+  }, [showAvailability, type, siteId, floorId, zoneName, currentMonth.getTime(), reloadTick]);
 
   // Costruisce le celle: pad iniziale (gg della settimana precedenti al 1°) +
   // giorni del mese + pad finale per arrotondare a 7.
@@ -413,9 +417,12 @@ export function SpotsCalendar({
                     isClosed
                       ? `Giorno bloccato: ${closedReason ?? ""}`
                       : isAvailable
-                        ? `${info!.available} disponibili su ${info!.total}`
+                        ? // "su N prenotabili da te": il totale esclude le
+                          // postazioni riservate ad altri gruppi (non contano
+                          // per te), quindi può essere < posti fisici totali.
+                          `${info!.available} disponibili su ${info!.total} prenotabili da te`
                         : isFull
-                          ? `Tutti i ${info!.total} posti occupati`
+                          ? `Tutti i ${info!.total} posti prenotabili sono occupati`
                           : myLabel ?? undefined
                   }
                 >

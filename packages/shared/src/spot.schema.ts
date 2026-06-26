@@ -14,6 +14,13 @@ export type Spot = z.infer<typeof SpotSchema>;
 export const SpotWithAvailabilitySchema = SpotSchema.extend({
   available: z.boolean(),
   zoneName: z.string().nullable(),
+  // Riserva (C7), calcolata per l'utente richiedente (o il target, per
+  // admin/manager "prenota per"):
+  //  - reservedGroupName: nome del gruppo a cui lo spot è riservato (null = aperto)
+  //  - lockedForMe: true se riservato a un gruppo di cui l'utente NON è membro
+  //    → non prenotabile (UI lo mostra lucchettato)
+  reservedGroupName: z.string().nullable(),
+  lockedForMe: z.boolean(),
 });
 export type SpotWithAvailability = z.infer<typeof SpotWithAvailabilitySchema>;
 

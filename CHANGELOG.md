@@ -2,6 +2,96 @@
 
 Storico delle feature/refactor completati. Le voci più recenti in alto. Le voci aperte stanno in [TODO.md](./TODO.md).
 
+## 2026-06-26 — Postazioni riservate a gruppi (SpotGroup, C7 + C7.1)
+
+Riserva di postazioni a categorie di utenti (es. Stagisti, Tutor, Primo
+intervento) per garantire capacità giornaliera. Sostituisce il workaround del
+pre-carico HR: HR riserva le postazioni una volta, gli interessati prenotano
+da soli. È un "Closure per-postazione e condizionato all'utente".
+
+### Schema
+- Model [`SpotGroup`](apps/api/prisma/schema.prisma) (`name` unique, `members`
+  **1:N** via FK `User.reservedGroupId`, `spots`). **Appartenenza esclusiva
+  (C7.1)**: un utente sta in al più un gruppo (FK singolo, non M:N) — una
+  persona in due gruppi prenoterebbe un solo posto coprendo due categorie,
+  falsando la garanzia di capienza. `Spot.reservedGroupId` e
+  `User.reservedGroupId` entrambi nullable (`onDelete: SetNull` → eliminare un
+  gruppo libera postazioni e membri, non li cancella). Migrazione
+  [`20260625120000_add_spot_groups`](apps/api/prisma/migrations/20260625120000_add_spot_groups/migration.sql)
+  (scritta a mano e validata identica al SQL generato da Prisma via
+  `migrate diff`). Sanata in corsa una drift pre-esistente di C5 (2 `@@index`
+  audit dichiarati nella migration ma non nello schema).
+
+### Backend
+- [`SpotGroupsService`](apps/api/src/spot-groups/spot-groups.service.ts) +
+  [`AdminSpotGroupsController`](apps/api/src/spot-groups/admin-spot-groups.controller.ts)
+  (**solo `@Roles(ADMIN)`** — il MANAGER non riserva, ne subisce solo gli
+  effetti): `GET /admin/spot-groups` (lista + capienza per tipo), `POST`, `DELETE`,
+  `GET /:id` (membri + spotIds), `PUT /:id/members`, `PUT /:id/spots` (replace).
+- **Eligibilità** centralizzata in un unico predicato puro
+  [`isSpotBookable`](apps/api/src/spot-groups/spot-groups.service.ts)
+  (`getUserEligibility`/`getUsersEligibility` → `{ groupId, coveredTypes }`),
+  riusato da list/availability/create/bulk:
+  - **C7 (vincolo sullo spot)**: uno spot riservato è prenotabile solo dai membri.
+  - **C7.1 (vincolo inverso sul membro, per-tipo)**: un membro di un gruppo che
+    riserva un certo tipo può prenotare, per quel tipo, **solo** le postazioni
+    del suo gruppo — niente posti aperti, **niente fallback** se sono pieni. Per
+    i tipi non coperti dal gruppo si comporta come utente normale.
+  - [`SpotsService.list`](apps/api/src/spots/spots.service.ts): ogni spot porta
+    `reservedGroupName` + `lockedForMe` per l'utente richiedente (o il target via
+    `?userId=` su `/admin/spots`); uno spot non prenotabile ha `available=false`.
+    Per uno spot aperto bloccato dal vincolo inverso `reservedGroupName` è null.
+  - `SpotsService.availability` (calendar): il conteggio "disponibili/totale"
+    considera solo gli spot eleggibili dal richiedente.
+  - [`ReservationsService.create`](apps/api/src/reservations/reservations.service.ts):
+    **403** se lo spot non è prenotabile dall'intestatario (messaggio diverso per
+    "riservato ad altri" vs "vincolo inverso"). Closure ha priorità (check prima).
+    Vale anche per admin/manager "prenota per" (eligibilità sull'utente target).
+  - `bulkCreate`: skip & report con reason per i due casi (explicit) / salta gli
+    spot non eleggibili nella ricerca pool.
+
+### Frontend
+- Nuova pagina [`/admin/spot-groups`](apps/web/src/components/AdminSpotGroupsList.tsx)
+  (voce nav "Postazioni riservate" sotto Amministrazione, ADMIN): riepilogo
+  capienza, CRUD gruppi, editor membri (FilterableMultiSelect) + assegnazione
+  postazioni (filtri sede/piano/tipo + **FilterableMultiSelect** typeahead al
+  posto della griglia di checkbox; il Set assegnato persiste tra i filtri così
+  salvare non perde gli spot fuori-filtro; etichetta "riservata a {altro
+  gruppo}" quando si sta per spostare uno spot). Capienza mostrata **per sede**
+  (con bottone ⓘ che spiega il calcolo). Messaggio di salvataggio **inline
+  nell'editor** (vicino al gruppo, non in cima alla pagina).
+  L'editor mostra membri e postazioni come **chip rimovibili** (singola × o
+  "rimuovi tutti/e"), elenco completo delle riservate di tutte le sedi senza
+  filtrare, tasti Salva **dirty-aware**. Membri già in un altro gruppo sono
+  marcati "— già in «X»" e, al salvataggio, un **modal di conferma** elenca chi
+  verrà spostato (C7.1, appartenenza esclusiva).
+- [`SpotsBrowser`](apps/web/src/components/SpotsBrowser.tsx): tooltip sulle righe
+  non prenotabili → "Riservato a {gruppo}", oppure (vincolo inverso C7.1, spot
+  aperto bloccato) "puoi prenotare solo le postazioni del tuo gruppo".
+  Tooltip availability calendar → "N disponibili su M prenotabili da te" (il
+  totale esclude le postazioni non prenotabili da te → può essere < posti fisici).
+- **Bottone Aggiorna anche in vista Calendario** di /parking, /desks,
+  /my-reservations (prima solo in vista Lista): `SpotsCalendar` accetta una prop
+  `reloadTick` per il re-fetch della disponibilità.
+- **Dialog admin eligibility-aware**: [`BookForUserDialog`](apps/web/src/components/BookForUserDialog.tsx)
+  passa `userId` a `/admin/spots` → la lista posti mostra solo quelli prenotabili
+  dall'utente target (niente più 403 "a sorpresa" dopo il click). Nella
+  [`BulkBookingsDialog`](apps/web/src/components/BulkBookingsDialog.tsx) mappatura
+  esplicita 1:1 (lista condivisa tra utenti, non prefiltrabile per-utente) le
+  option segnalano "· riservata a {gruppo}"; l'auto-assign resta validato dal
+  backend (skip + report).
+- **Menu account**: mostra il **gruppo di riserva** dell'utente loggato (C7.1),
+  letto da `GET /me` (esteso con `reservedGroupName`; non è nel JWT).
+- api client + `SpotWithAvailability` esteso con `reservedGroupName`/`lockedForMe`;
+  `AdminUserItem` esteso con `reservedGroupName` (da `/admin/users`); nuovo
+  `listAdminSpots({userId})` e `getMe()`.
+
+### Decisioni
+Membership manuale (HR), **0/1 gruppo per spot e 0/1 gruppo per utente
+(esclusiva, C7.1)**, spot riservati visibili-lucchettati, **vincolo inverso
+per-tipo senza fallback (C7.1)**, closure prevale sulla riserva, avviso capienza
+in UI, gestione solo ADMIN. Dettagli e decisioni in TODO **C7 / C7.1**.
+
 ## 2026-06-23 — Pagine MANAGER scoped ai riporti (/manager/*)
 
 Implementazione della feature MANAGER (B1): un MANAGER ha viste speculari a quelle admin ma **scoped ai propri riporti diretti + sé stesso**. Scelte: pagine/componenti **duplicati** (`/manager/*`, separati da `/admin/*` per personalizzazione futura per ruolo), **niente** gestione chiusure per manager.

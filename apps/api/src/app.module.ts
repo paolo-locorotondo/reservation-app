@@ -9,6 +9,7 @@ import { SpotsModule } from "./spots/spots.module";
 import { ReservationsModule } from "./reservations/reservations.module";
 import { ClosuresModule } from "./closures/closures.module";
 import { ManagerModule } from "./manager/manager.module";
+import { SpotGroupsModule } from "./spot-groups/spot-groups.module";
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { ManagerModule } from "./manager/manager.module";
     ReservationsModule,
     ClosuresModule,
     ManagerModule,
+    SpotGroupsModule,
   ],
   controllers: [HealthController],
 })

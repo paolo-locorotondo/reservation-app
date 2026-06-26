@@ -215,11 +215,68 @@ Quando si attiva: schema migration + estensione `Closure.create` con opt `cancel
 - **Priority**: 🟡 MED (utile in HR, ma fragile senza notifiche)
 - **Stato**: ⏳ DA ANALIZZARE — aspetta canale notifiche aziendale
 
-##### C2 — Posti riservati a categorie (manager, stagisti, etc.)
+##### C7 — Postazioni riservate (SpotGroup) — in implementazione
 
-Decisione presa: **strada (a)** = prenotazioni "pre-caricate" da HR per conto degli interessati. Riusa il pattern di prenotazione per altri (admin POST), niente schema cambiato. Trade-off accettato: sposta lavoro su HR vs automazione.
+Sostituisce il vecchio C2 (pre-carico HR come workaround). Requisito reale:
+garantire ogni giorno capacità per categorie (tutti gli stagisti, ≥4 tutor,
+5 manager, 2 primo-intervento, ...). **Intuizione**: è un requisito di
+*capacità garantita*, non di presenza forzata → si soddisfa **riservando N
+postazioni per categoria** (il "conteggio" emerge da quante postazioni HR
+riserva). È un "Closure per-postazione e condizionato all'utente".
 
-L'implementazione manuale uno-per-uno è proibitiva (5 stagisti × ~100 giorni lavorativi = 500 click) → C3 è il prerequisito UX.
+**Modello scelto — gruppi di riserva (SpotGroup)**:
+```prisma
+model SpotGroup {
+  id      String  @id @default(cuid())
+  name    String  @unique   // "Stagisti", "Tutor", "Primo intervento"
+  members User[]  // M:N (un utente può stare in più gruppi)
+  spots   Spot[]  // postazioni riservate a questo gruppo
+}
+model Spot {
+  // ...
+  reservedGroupId String?    // null = aperta a tutti (default)
+}
+```
+Regola di prenotabilità `(utente, spot)`: `reservedGroupId == null` → libera;
+altrimenti prenotabile **solo** se l'utente è membro del gruppo. "4 tutor" =
+HR mette 4 scrivanie nel gruppo "Tutor"; "tutti gli stagisti" = gruppo
+"Stagisti" con tutti gli stagisti membri.
+
+**Decisioni prese**:
+1. **Membership manuale** (HR via UI). Sync da claim w3id/BlueGroups → futuro.
+2. **0/1 gruppo per spot** (non M:N spot↔gruppo). Più semplice; estendibile poi.
+3. **Visibilità: lucchettate** — gli spot riservati non-tuoi appaiono grigi +
+   lucchetto (trasparenza), non nascosti.
+4. **Closure vince**: se uno spot è sia riservato sia in giorno bloccato →
+   prevale il blocco (check closure prima).
+5. **Avviso capienza** ad HR: "riservate 11/62, libere 51" nella UI di gestione.
+6. **Solo ADMIN gestisce** gruppi + assegnazioni. Il MANAGER NON riserva: ne
+   subisce solo gli effetti (eligibilità quando prenota per i riporti / bulk,
+   spot lucchettati nei calendar). I controller `/admin/spot-groups` sono
+   `@Roles(ADMIN)`.
+
+**Impatto booking** (stesso innesto del Closure, è un filtro di eligibilità):
+- `SpotsService.list`: ogni spot porta `reserved`/`reservedGroupName`/`lockedForMe`
+  per l'utente richiedente (per admin/manager "prenota per": eligibilità
+  sull'utente TARGET).
+- `SpotsService.availability` (calendar): conteggio "available/total" calcolato
+  sui soli spot **eleggibili dall'utente richiedente** (coerente con la lista).
+- `ReservationsService.create`: 403 se spot riservato e utente non nel gruppo.
+- bulk: skip & report "utente non eleggibile per la postazione".
+
+**UI**:
+- Nuova pagina admin `/admin/spot-groups`: CRUD gruppi, membri (multiselect
+  utenti), assegnazione postazioni (per sede/piano) + avviso capienza.
+- Calendar/lista utente: spot riservati non-tuoi lucchettati (tooltip
+  "Riservato a {gruppo}"); i tuoi riservati con badge.
+
+**Stima**: 2-3 giornate. File: prisma schema + migrazione, `SpotGroupsService`
++ `AdminSpotGroupsController`, eligibilità in `SpotsService.list/availability`
++ `ReservationsService.create/bulkCreate`, pagina admin + componenti, css
+`.rsv-calendar-day--reserved` (o riuso `--closed`), api client.
+
+- **Priority**: 🟢 IN IMPLEMENTAZIONE
+- **Stato**: 📐 deciso, implementazione avviata
 
 ##### C3 — Operazioni bulk (precarico massivo prenotazioni HR) — ✅ implementato (vedi `CHANGELOG.md`)
 
@@ -339,11 +396,37 @@ Nota: il sort è client-side su tutto il dataset (giusto, deve precedere lo slic
 - ✅ **Bulk pre-carico HR** (parte di C, vedi `CHANGELOG.md`): modal wizard in `/admin/reservations`.
 - ✅ **Cancellazione massiva** (parte di C, vedi `CHANGELOG.md`): bulk-cancel righe selezionate in /admin/reservations.
 - ✅ **Audit createdBy/cancelledBy** (vedi `CHANGELOG.md`): colonne "Creata da"/"Cancellata da".
+- ✅ **Postazioni riservate (SpotGroup)** (parte di C, vedi `CHANGELOG.md` C7).
 - **Paginazione tabelle admin** (vedi sezione **C6**: /admin/reservations + /admin/closures).
 - **Cancellazione retroattiva al blocco** (vedi sezione **C1.1**: aspetta canale notifiche aziendale).
 - **Sezione config** parametri DB-level (parte di C, decisione Q3 dice "non ora — env").
 - **Export** CSV / Excel — fase 2, dopo che la pagina vede uso reale.
 - **Notifica utente** quando admin cancella la sua prenotazione: email / in-app. Per ora avviso esplicito nel modal admin "L'utente non riceve notifica". Da rivedere quando l'azienda definirà il canale di notifiche aziendale.
+
+##### C7 — Follow-up (post-MVP della feature riserve)
+
+- ~~**C7.1 — Vincolo inverso "membro → solo le sue postazioni"**~~ ✅ **FATTO** (2026-06-26, vedi CHANGELOG). Decisioni: vincolo **per-tipo** (Q1), **nessun fallback** se le riservate sono piene (Q3), **appartenenza esclusiva** un utente in ≤1 gruppo via FK `User.reservedGroupId` (Q2 — evita che una persona in due gruppi falsi la capienza). Regola centralizzata in `SpotGroupsService.isSpotBookable`. Editor membri con avviso di spostamento.
+- **C7.2 — Warning capienza membri/postazioni per gruppo**: avviso (stile box info capienza, ma warning) quando per un gruppo le postazioni riservate non coprono i membri. Calcolo per-tipo: per N membri il "giusto" è N posti auto E/O N scrivanie (max utile 2N totali). Richiede il conteggio per-tipo delle postazioni assegnate, che il client oggi NON ha (il dettaglio gruppo ritorna solo `spotIds`, non i tipi). Implementazione: estendere `GET /admin/spot-groups/:id` con i conteggi `{parking, desk}` delle postazioni assegnate, poi mostrare il warning nell'editor. Stima: ~mezza giornata.
+- **C7.3 — Modale conferma "stai spostando postazioni"**: quando si salvano postazioni che erano riservate ad ALTRO gruppo, mostrare un modale di conferma che elenca gli spostamenti (oggi avviene direttamente al salvataggio, con solo l'etichetta "riservata a X" nella multiselect). Nice-to-have.
+
+##### Varie UX (DA FARE, bassa priorità)
+
+- **Azioni admin/manager anche in vista Calendario**: i bottoni "Prenota per utente…" e "Prenotazione massiva…" oggi sono solo in vista Lista; valutare di mostrarli anche in Calendario.
+- **Notifica su cancellazione che libera un posto**: quando una prenotazione viene cancellata (liberando un posto), inviare una notifica via **Slack** (webhook) o **email** (strada più semplice/gratuita) — utile per chi era in attesa di quel posto. Da incrociare con la voce "Notifica utente" sopra e col canale notifiche aziendale.
+
+---
+
+#### Analisi C7.1 — Vincolo inverso "membro → solo le postazioni del suo gruppo" ✅ RISOLTA (2026-06-26)
+
+**Requisito**: un membro di un gruppo che riserva postazioni deve poter prenotare SOLO quelle (per i tipi che il gruppo copre), non i posti aperti.
+
+**Decisioni prese** (le 4 domande aperte):
+1. **Per-tipo**: il vincolo vale solo per i tipi coperti dal gruppo (Stagisti riserva scrivanie → lo stagista prende scrivanie solo tra le sue, ma i posti auto restano liberi).
+2. **Appartenenza esclusiva**: un utente sta in ≤1 gruppo. Modellata con FK `User.reservedGroupId` (non più M:N). Motivo: una persona in Tutor + Primo intervento prenoterebbe un solo posto coprendo due categorie → la garanzia di capienza salterebbe.
+3. **Nessun fallback**: se le riservate del tipo sono piene, il membro resta senza posto.
+4. **403** con messaggio differenziato (riservato ad altri / vincolo inverso).
+
+**Implementazione**: regola unica in `SpotGroupsService.isSpotBookable` (`getUserEligibility`/`getUsersEligibility`), riusata da `SpotsService.list`/`availability` e `ReservationsService.create`/`bulkCreate`. Migration `20260625120000` refattorizzata (FK al posto della join table, feature non ancora deployata). Editor membri: avviso di spostamento per utenti già in un altro gruppo. Le multiselect/combo di scelta posto NON hanno richiesto modifiche: usano già `available`/`lockedForMe` calcolati lato server. Vedi CHANGELOG 2026-06-26.
 
 ---
 

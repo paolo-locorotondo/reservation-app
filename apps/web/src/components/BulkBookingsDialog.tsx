@@ -84,6 +84,18 @@ function isoFromDate(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
+// Etichetta di un posto nella mappatura esplicita. La lista è condivisa tra
+// tutti gli utenti (un solo set di filtri), quindi non possiamo prefiltrarla
+// per l'eligibilità del singolo utente; segnaliamo invece nell'option se il
+// posto è "riservata a X" (C7.1) — coerente con l'editor /admin/spot-groups.
+// Se l'admin mappa un posto non valido per quell'utente, bulkCreate lo salta e
+// lo riporta nel report finale.
+function bulkSpotLabel(s: SpotWithAvailability): string {
+  const zone = s.zoneName ? ` - ${s.zoneName}` : "";
+  const reserved = s.reservedGroupName ? ` · riservata a ${s.reservedGroupName}` : "";
+  return `${s.code}${zone}${reserved}`;
+}
+
 // Conta i giorni nel range [from, to] che matchano almeno uno dei weekdays
 // selezionati. Usato dalla preview "5 utenti × 23 giorni = 115 prenotazioni".
 function countMatchingDays(
@@ -791,7 +803,7 @@ function Step3Mapping(props: Step3Props) {
                         }
                         items={lookupSpots}
                         itemToString={(s: SpotWithAvailability | null) =>
-                          s ? `${s.code}${s.zoneName ? ` - ${s.zoneName}` : ""}` : ""
+                          s ? bulkSpotLabel(s) : ""
                         }
                         selectedItem={currentSpot}
                         disabled={!lookupSiteId}

@@ -17,6 +17,9 @@ export class UsersController {
       email: user.email,
       displayName: user.displayName,
       role: user.role,
+      // Gruppo di riserva di appartenenza (C7.1), null se nessuno. Letto fresco
+      // da DB (non è nel JWT, congelato al login): l'admin può assegnarlo dopo.
+      reservedGroupName: await this.users.getReservedGroupName(user.id),
     };
   }
 }

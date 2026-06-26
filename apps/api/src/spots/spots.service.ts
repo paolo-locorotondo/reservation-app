@@ -3,6 +3,10 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { MAX_DAYS_AHEAD } from "../common/business-rules";
 import { ClosuresService } from "../closures/closures.service";
+import {
+  SpotGroupsService,
+  isSpotBookable,
+} from "../spot-groups/spot-groups.service";
 import type {
   SpotsQuery,
   SpotsAvailabilityQuery,
@@ -14,6 +18,7 @@ export class SpotsService {
   constructor(
     private prisma: PrismaService,
     private closures: ClosuresService,
+    private spotGroups: SpotGroupsService,
   ) {}
 
   /**
@@ -34,7 +39,7 @@ export class SpotsService {
    */
   async list(
     q: SpotsQuery,
-    opts: { unrestrictedDate?: boolean } = {},
+    opts: { unrestrictedDate?: boolean; eligibilityUserId?: string } = {},
   ): Promise<SpotsListResponse> {
     const date = opts.unrestrictedDate
       ? parseDateOnly(q.date)
@@ -73,6 +78,9 @@ export class SpotsService {
         zoneId: true,
         active: true,
         zone: { select: { name: true } },
+        // Riserva (C7): nome del gruppo a cui lo spot è riservato (null = aperto).
+        reservedGroupId: true,
+        reservedGroup: { select: { name: true } },
       },
     });
     if (spots.length === 0) {
@@ -89,12 +97,32 @@ export class SpotsService {
     });
     const taken = new Set(reservations.map((r) => r.spotId));
 
+    // Eligibilità riserva (C7 + C7.1): `lockedForMe=true` se lo spot NON è
+    // prenotabile dall'utente (richiedente per /spots, target per /admin/spots)
+    // secondo `isSpotBookable` — copre sia "riservato a un gruppo di cui non
+    // faccio parte" sia il vincolo inverso "sono membro e questo è un posto
+    // aperto di un tipo che il mio gruppo riserva". Senza `eligibilityUserId`
+    // (es. admin che non ha scelto un utente) niente lock: l'admin vede tutto,
+    // e `create()` farà comunque rispettare la regola.
+    const eligibility = opts.eligibilityUserId
+      ? await this.spotGroups.getUserEligibility(opts.eligibilityUserId)
+      : null;
+
     return {
-      items: spots.map(({ zone, ...s }) => ({
-        ...s,
-        zoneName: zone?.name ?? null,
-        available: !taken.has(s.id),
-      })),
+      items: spots.map(({ zone, reservedGroup, reservedGroupId, ...s }) => {
+        const lockedForMe =
+          eligibility !== null &&
+          !isSpotBookable({ reservedGroupId, type: s.type }, eligibility);
+        return {
+          ...s,
+          zoneName: zone?.name ?? null,
+          // Uno spot non prenotabile dall'utente non è "available" per lui,
+          // anche se fisicamente libero.
+          available: !taken.has(s.id) && !lockedForMe,
+          reservedGroupName: reservedGroup?.name ?? null,
+          lockedForMe,
+        };
+      }),
       closed: false,
       closedReason: null,
     };
@@ -106,7 +134,10 @@ export class SpotsService {
    * filtro tipo+sede+piano e tutte le reservation ACTIVE nel range. Il conteggio
    * per-giorno è poi fatto in memoria.
    */
-  async availability(q: SpotsAvailabilityQuery): Promise<SpotsAvailabilityDay[]> {
+  async availability(
+    q: SpotsAvailabilityQuery,
+    eligibilityUserId?: string,
+  ): Promise<SpotsAvailabilityDay[]> {
     const from = parseDateUtc(q.from);
     const to = parseDateUtc(q.to);
     if (to.getTime() < from.getTime()) {
@@ -130,10 +161,21 @@ export class SpotsService {
         : {}),
     };
 
-    const spots = await this.prisma.spot.findMany({
+    const allSpots = await this.prisma.spot.findMany({
       where,
-      select: { id: true },
+      select: { id: true, type: true, reservedGroupId: true },
     });
+    // Riserva (C7 + C7.1): il conteggio mostrato all'utente considera SOLO gli
+    // spot che lui può prenotare (vedi `isSpotBookable`). Così il
+    // "disponibili/totale" del calendario coincide con la lista. Senza
+    // `eligibilityUserId` si contano tutti (non dovrebbe capitare per i
+    // calendar utente, che passano sempre il richiedente).
+    const eligibility = eligibilityUserId
+      ? await this.spotGroups.getUserEligibility(eligibilityUserId)
+      : null;
+    const spots = eligibility
+      ? allSpots.filter((s) => isSpotBookable(s, eligibility))
+      : allSpots;
     const total = spots.length;
 
     // Range vuoto di spot → comunque emettiamo la riga per ogni giorno con
@@ -209,6 +251,8 @@ export interface SpotsListResponse {
     active: boolean;
     zoneName: string | null;
     available: boolean;
+    reservedGroupName: string | null;
+    lockedForMe: boolean;
   }>;
   closed: boolean;
   closedReason: string | null;
